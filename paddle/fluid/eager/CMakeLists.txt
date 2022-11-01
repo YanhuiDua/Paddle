@@ -15,6 +15,7 @@ set(eager_deps
     grad_tensor_holder
     accumulation_node
     custom_operator_node
+    ${DEVICE_EVENT_LIBS}
     python)
 
 set(fluid_deps

@@ -15,13 +15,13 @@
 #include "paddle/fluid/eager/accumulation/accumulation_node.h"
 
 #include "glog/logging.h"
+#include "paddle/fluid/eager/api/generated/eager_generated/forwards/dygraph_functions.h"
 #include "paddle/fluid/eager/eager_tensor.h"
 #include "paddle/fluid/eager/utils.h"
 #include "paddle/fluid/imperative/gradient_accumulator.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/errors.h"
-#include "paddle/phi/api/all.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/sparse_coo_tensor.h"
 
@@ -44,8 +44,16 @@ static void CopyOrAddTensor(paddle::experimental::Tensor* tensor,
       // Accumulation
       if (LIKELY(t.is_dense_tensor())) {
         if (LIKELY(tensor->is_dense_tensor())) {
-          paddle::imperative::TensorAdd<paddle::experimental::Tensor>(t,
-                                                                      tensor);
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+          if (t.is_custom_device()) {
+            *tensor = add_ad_func(t, *tensor);
+          } else {
+#endif
+            paddle::imperative::TensorAdd<paddle::experimental::Tensor>(t,
+                                                                        tensor);
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+          }
+#endif
         } else {
           // TODO(jiabin): Support Other TensorBase later
           // TODO(zhanlve): Replace SelectedRowsAddTensor with
@@ -68,8 +76,16 @@ static void CopyOrAddTensor(paddle::experimental::Tensor* tensor,
           paddle::experimental::Tensor tensor_values(
               std::make_shared<phi::DenseTensor>(
                   tensor_sparse->non_zero_elements()));
-          paddle::imperative::TensorAdd<paddle::experimental::Tensor>(
-              t_values, &tensor_values);
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+          if (t.is_custom_device()) {
+            tensor_values = add_ad_func(t_values, tensor_values);
+          } else {
+#endif
+            paddle::imperative::TensorAdd<paddle::experimental::Tensor>(
+                t_values, &tensor_values);
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+          }
+#endif
         }
       } else {
         // TODO(jiabin): Support Other TensorBase later
