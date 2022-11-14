@@ -328,10 +328,10 @@ void CholeskySolveInferMeta(const MetaTensor& x,
   out->share_lod(x);
 }
 
-void CompareInferMeta(const MetaTensor& x,
-                      const MetaTensor& y,
-                      int axis,
-                      MetaTensor* out) {
+void CompareRawInferMeta(const MetaTensor& x,
+                         const MetaTensor& y,
+                         int axis,
+                         MetaTensor* out) {
   auto dim_x = x.dims();
   auto dim_y = y.dims();
 
@@ -356,6 +356,12 @@ void CompareInferMeta(const MetaTensor& x,
   }
 
   out->set_dtype(DataType::BOOL);
+}
+
+void CompareInferMeta(const MetaTensor& x,
+                      const MetaTensor& y,
+                      MetaTensor* out) {
+  CompareRawInferMeta(x, y, -1, out);
 }
 
 void CompareAllInferMeta(const MetaTensor& x,
@@ -564,9 +570,6 @@ void Conv3DInferMeta(const MetaTensor& input,
                      int groups,
                      const std::vector<int>& dilations,
                      const std::string& data_format,
-                     bool use_addto,
-                     int workspace_size_MB,
-                     bool exhaustive_search,
                      MetaTensor* out,
                      MetaConfig config) {
   ConvInferMeta(input,
@@ -927,9 +930,6 @@ void DepthwiseConvInferMeta(const MetaTensor& input,
                             int groups,
                             const std::vector<int>& dilations,
                             const std::string& data_format,
-                            bool use_addto,
-                            int workspace_size_MB,
-                            bool exhaustive_search,
                             MetaTensor* out,
                             MetaConfig config) {
   ConvInferMeta(input,

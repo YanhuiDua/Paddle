@@ -2265,6 +2265,7 @@ USE_TRT_CONVERTER(instance_norm);
 USE_TRT_CONVERTER(layer_norm);
 USE_TRT_CONVERTER(gelu);
 USE_TRT_CONVERTER(multihead_matmul);
+USE_TRT_CONVERTER(multihead_matmul_roformer);
 USE_TRT_CONVERTER(skip_layernorm);
 USE_TRT_CONVERTER(slice);
 USE_TRT_CONVERTER(scale);
@@ -2318,11 +2319,15 @@ USE_TRT_CONVERTER(sum)
 USE_TRT_CONVERTER(shape)
 USE_TRT_CONVERTER(fill_constant)
 USE_TRT_CONVERTER(fused_token_prune)
+USE_TRT_CONVERTER(celu)
 USE_TRT_CONVERTER(layernorm_shift_partition)
 USE_TRT_CONVERTER(preln_layernorm_shift_partition)
 USE_TRT_CONVERTER(merge_layernorm)
+USE_TRT_CONVERTER(skip_merge_layernorm)
 USE_TRT_CONVERTER(generic_plugin_creater)
 USE_TRT_CONVERTER(custom_plugin_creater)
+USE_TRT_CONVERTER(tanh_shrink)
+USE_TRT_CONVERTER(logsigmoid)
 USE_TRT_CONVERTER(lookup_table)
 USE_TRT_CONVERTER(expand_v2)
 #if PADDLE_WITH_CUSPARSELT && IS_TRT_VERSION_GE(8000)
