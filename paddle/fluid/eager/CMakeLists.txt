@@ -13,9 +13,13 @@ set(eager_deps
     eager_nan_inf_utils
     grad_node_info
     grad_tensor_holder
-    accumulation_node
     custom_operator_node
+    ${DEVICE_EVENT_LIBS}
     python)
+
+if(NOT (NOT WITH_PYTHON AND ON_INFER))
+  set(eager_deps ${eager_deps} accumulation_node)
+endif()
 
 set(fluid_deps
     tracer
