@@ -1863,6 +1863,9 @@ def linear(x, weight, bias=None, name=None):
           #     [2.1077576  2.1077576  2.1077576  2.1077576 ]]
     """
     if in_dygraph_mode():
+        # if 'npu' in paddle.device.get_all_custom_device_type():
+        #     weight_trans = _C_ops.npu_identity(weight, 29)
+        #     weight_trans._share_underline_tensor_to(weight)
         # TODO(jiabin): using addmm for fast forward route
         return _C_ops.linear(x, weight, bias)
     else:
@@ -1873,7 +1876,26 @@ def linear(x, weight, bias=None, name=None):
             x, 'x', ['float16', 'float32', 'float64'], 'linear'
         )
         check_dtype(dtype, 'dtype', ['float16', 'float32', 'float64'], 'linear')
-
+        # transform weight to npu NZ format
+        # if "npu" in paddle.device.get_all_custom_device_type() and ((x.shape[len(x.shape)-1] & 0x0000000F) or (x.shape[len(x.shape)-2] & 0x0000000F) or  (weight.shape[len(weight.shape)-1] & 0x0000000F) or (weight.shape[len(weight.shape)-2] & 0x0000000F)) and _global_flags()['FLAGS_npu_storage_format'] and (convert_dtype(dtype) in ['float16']):
+        #     print("debug : transform weight to NZ format for npu")
+        #     weight_trans = helper.create_variable_for_type_inference(dtype=weight.dtype, stop_gradient=weight.stop_gradient)
+        #     helper.append_op(
+        #         type='npu_identity',
+        #         inputs={'x': [weight]},
+        #         outputs={'out': [weight_trans]},
+        #         attrs={'format': 29},
+        #     )
+        #     inputs = {'X': [x], 'Y': [weight_trans]}
+        #     attrs = {'trans_x': False, 'trans_y': False}
+        #     tmp = helper.create_variable_for_type_inference(dtype)
+        #     helper.append_op(
+        #         type='matmul_v2',
+        #         inputs=inputs,
+        #         outputs={'Out': tmp},
+        #         attrs=attrs,
+        #     )
+        # else:
         inputs = {'X': [x], 'Y': [weight]}
         attrs = {'trans_x': False, 'trans_y': False}
         tmp = helper.create_variable_for_type_inference(dtype)
