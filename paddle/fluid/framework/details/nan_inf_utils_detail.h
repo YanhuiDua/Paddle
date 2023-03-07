@@ -353,6 +353,13 @@ void tensor_check(const std::string& op_type,
                   const phi::DenseTensor& tensor,
                   const platform::Place& place);
 
+template <typename DeviceContext>
+void tensor_check(const std::string& op_type,
+                  const std::string& var_name,
+                  const phi::DenseTensor& tensor,
+                  const platform::Place& place,
+                  const std::string& folder_path);
+
 }  // namespace details
 }  // namespace framework
 }  // namespace paddle
