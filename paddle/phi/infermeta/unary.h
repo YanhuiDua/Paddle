@@ -702,4 +702,8 @@ void UnStackInferMeta(const MetaTensor& x,
                       int num,
                       std::vector<MetaTensor*> outs);
 
+void CheckNanInfInferMeta(const MetaTensor& x,
+                          const std::string&,
+                          const std::string&,
+                          MetaTensor* out);
 }  // namespace phi

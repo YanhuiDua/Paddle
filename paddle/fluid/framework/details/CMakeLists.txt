@@ -70,8 +70,8 @@ endif()
 if(WITH_GPU)
   nv_library(
     nan_inf_utils
-    SRCS nan_inf_utils_detail.cc
-    DEPS framework_proto scope place phi)
+    SRCS nan_inf_utils_detail.cc nan_inf_utils_detail.cu
+    DEPS framework_proto scope place eager_nan_inf_utils)
   nv_library(
     all_reduce_op_handle
     SRCS all_reduce_op_handle.cc
@@ -206,7 +206,7 @@ else()
   cc_library(
     nan_inf_utils
     SRCS nan_inf_utils_detail.cc
-    DEPS framework_proto scope place phi)
+    DEPS framework_proto scope place eager_nan_inf_utils)
   cc_library(
     all_reduce_op_handle
     SRCS all_reduce_op_handle.cc
