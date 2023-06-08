@@ -14,12 +14,13 @@
 
 #include "paddle/fluid/framework/details/nan_inf_utils_detail.h"
 
+#include <dirent.h>
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/details/nan_inf_utils.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 #include "paddle/fluid/framework/scope.h"
+#include "paddle/fluid/operators/tensor_formatter.h"
 #include "paddle/phi/common/amp_type_traits.h"
-
-#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/phi/core/flags.h"
 #include "paddle/phi/kernels/funcs/eigen/extensions.h"
 
@@ -155,6 +156,89 @@ static void InitWhiteListFormEnv() {
       op_var_nan_inf_white_list()[op].emplace_back(var);
     }
   }
+}
+
+template <>
+template <typename T>
+void TensorCheckerVisitor<phi::CPUContext>::apply(
+    typename std::enable_if<
+        std::is_floating_point<T>::value ||
+        std::is_same<T, ::paddle::platform::complex<float>>::value ||
+        std::is_same<T, ::paddle::platform::complex<double>>::value>::type*)
+    const {
+  std::string cpu_hint_str =
+      GetCpuHintString<T>(op_type, var_name, tensor.place());
+  CheckNanInfCpuImpl(tensor.data<T>(), tensor.numel(), cpu_hint_str);
+}
+
+template <>
+void tensor_check<phi::CPUContext>(const std::string& op_type,
+                                   const std::string& var_name,
+                                   const phi::DenseTensor& tensor,
+                                   const platform::Place& place) {
+  TensorCheckerVisitor<phi::CPUContext> vistor(
+      op_type, var_name, tensor, place);
+  VisitDataType(framework::TransToProtoVarType(tensor.dtype()), vistor);
+}
+
+int GetTensorName(const std::string& folder_path) {
+  int file_count = 0;
+  DIR* directory = opendir(folder_path.c_str());
+  dirent* entry;
+  while ((entry = readdir(directory)) != nullptr) {
+    if (entry->d_type == DT_REG) {
+      file_count++;
+    }
+  }
+  closedir(directory);
+  return file_count;
+}
+
+template <>
+void tensor_check<phi::CPUContext>(const std::string& op_type,
+                                   const std::string& tensor_name,
+                                   const phi::DenseTensor& tensor,
+                                   const platform::Place& place,
+                                   const std::string& folder_path) {
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> lock(mutex);
+
+  std::string filename = tensor_name;
+  std::size_t pos = filename.find("/");
+  while (pos != std::string::npos) {
+    filename.replace(pos, 1, ".");
+    pos = filename.find("/");
+  }
+
+  std::string mkdir_cmd = "mkdir -p " + folder_path;
+  PADDLE_ENFORCE_EQ(system(mkdir_cmd.c_str()),
+                    0,
+                    paddle::platform::errors::NotFound(
+                        "Cannot create folder %s", folder_path));
+
+  std::string new_name = std::to_string(GetTensorName(folder_path));
+  std::string new_folder_path;
+  if (filename == "") {
+    new_folder_path = folder_path + "/" + op_type + "_" + new_name + ".txt";
+  } else {
+    new_folder_path =
+        folder_path + "/" + op_type + "_" + filename + "_" + new_name + ".txt";
+    new_name = filename;
+  }
+
+  // std::string file_path = new_folder_path + new_name + ".txt";
+  std::ofstream fout(new_folder_path);
+  PADDLE_ENFORCE_EQ(
+      static_cast<bool>(fout),
+      true,
+      paddle::platform::errors::NotFound("Cannot open %s to write", new_name));
+
+  // fout << var_name;
+  paddle::operators::TensorFormatter formatter;
+  fout << formatter.Format(tensor, new_name, "");
+
+  fout.close();
+  VLOG(4) << "Save tensor to text file " << new_folder_path;
 }
 
 void CheckVarHasNanOrInf(const std::string& op_type,
