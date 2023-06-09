@@ -166,9 +166,9 @@ void TensorCheckerVisitor<phi::CPUContext>::apply(
         std::is_same<T, ::paddle::platform::complex<float>>::value ||
         std::is_same<T, ::paddle::platform::complex<double>>::value>::type*)
     const {
-  std::string cpu_hint_str =
-      GetCpuHintString<T>(op_type, var_name, tensor.place());
-  CheckNanInfCpuImpl(tensor.data<T>(), tensor.numel(), cpu_hint_str);
+  // std::string cpu_hint_str =
+  //     GetCpuHintString<T>(op_type, var_name, tensor.place());
+  // CheckNanInfCpuImpl(tensor.data<T>(), tensor.numel(), cpu_hint_str);
 }
 
 template <>
@@ -192,6 +192,95 @@ int GetTensorName(const std::string& folder_path) {
   }
   closedir(directory);
   return file_count;
+}
+
+template <typename T>
+void FormatData(const phi::DenseTensor& print_tensor,
+                std::stringstream& log_stream) {
+  int64_t print_size = print_tensor.numel();
+  const T* data = nullptr;
+  phi::DenseTensor cpu_tensor;
+  if (paddle::platform::is_cpu_place(print_tensor.place())) {
+    data = print_tensor.data<T>();
+  } else {
+    platform::CPUPlace cpu_place;
+    paddle::framework::TensorCopy(print_tensor, cpu_place, &cpu_tensor);
+    data = cpu_tensor.data<T>();
+    platform::DeviceContextPool::Instance().Get(print_tensor.place())->Wait();
+  }
+
+  log_stream << "  - data: [";
+  if (print_size > 0) {
+    log_stream << data[0];
+    for (int64_t i = 1; i < print_size; ++i) {
+      log_stream << " " << data[i];
+    }
+  }
+  log_stream << "]" << std::endl;
+}
+
+std::string Format(const phi::DenseTensor& print_tensor,
+                   const std::string& tensor_name,
+                   const std::string& message) {
+  std::stringstream log_stream;
+  if (!tensor_name.empty()) {
+    log_stream << "Variable: " << tensor_name << std::endl;
+  }
+
+  if (!message.empty()) {
+    log_stream << "  - message: " << message << std::endl;
+  }
+
+  // if (print_tensor_lod_) {
+  log_stream << "  - lod: {";
+  const framework::LoD& lod = print_tensor.lod();
+  for (auto level : lod) {
+    log_stream << "{";
+    bool is_first = true;
+    for (auto i : level) {
+      if (is_first) {
+        log_stream << i;
+        is_first = false;
+      } else {
+        log_stream << ", " << i;
+      }
+    }
+    log_stream << "}";
+  }
+  log_stream << "}" << std::endl;
+  // }
+
+  log_stream << "  - place: " << print_tensor.place() << std::endl;
+
+  // if (print_tensor_shape_) {
+  log_stream << "  - shape: " << print_tensor.dims().to_str() << std::endl;
+  // }
+
+  // if (print_tensor_layout_) {
+  log_stream << "  - layout: " << phi::DataLayoutToString(print_tensor.layout())
+             << std::endl;
+  // }
+
+  std::type_index dtype = framework::ToTypeIndex(
+      framework::TransToProtoVarType(print_tensor.dtype()));
+  // if (print_tensor_type_) {
+  log_stream << "  - dtype: " << platform::demangle(dtype.name()) << std::endl;
+  // }
+
+  if (framework::IsType<const float>(dtype)) {
+    FormatData<float>(print_tensor, log_stream);
+  } else if (framework::IsType<const double>(dtype)) {
+    FormatData<double>(print_tensor, log_stream);
+  } else if (framework::IsType<const int>(dtype)) {
+    FormatData<int>(print_tensor, log_stream);
+  } else if (framework::IsType<const int64_t>(dtype)) {
+    FormatData<int64_t>(print_tensor, log_stream);
+  } else if (framework::IsType<const bool>(dtype)) {
+    FormatData<bool>(print_tensor, log_stream);
+  } else {
+    log_stream << "  - data: unprintable type: " << dtype.name() << std::endl;
+  }
+  return log_stream.str();
 }
 
 template <>
@@ -234,8 +323,8 @@ void tensor_check<phi::CPUContext>(const std::string& op_type,
       paddle::platform::errors::NotFound("Cannot open %s to write", new_name));
 
   // fout << var_name;
-  paddle::operators::TensorFormatter formatter;
-  fout << formatter.Format(tensor, new_name, "");
+  // paddle::operators::TensorFormatter formatter;
+  fout << Format(tensor, new_name, "");
 
   fout.close();
   VLOG(4) << "Save tensor to text file " << new_folder_path;
