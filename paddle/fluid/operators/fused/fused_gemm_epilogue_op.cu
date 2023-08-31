@@ -13,62 +13,181 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include <algorithm>
+#include <mutex>
+#include <unordered_map>
+#include "paddle/fluid/platform/float16.h"
+
+#include "gflags/gflags.h"
+#include "glog/logging.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/platform/bfloat16.h"
-#include "paddle/fluid/platform/float16.h"
-#include "paddle/phi/kernels/funcs/fused_gemm_epilogue.h"
+#include "paddle/phi/backends/all_context.h"
+#include "paddle/phi/backends/gpu/rocm/rocm_helper.h"
+#include "paddle/phi/common/amp_type_traits.h"
+#include "paddle/phi/common/float16.h"
+#include "paddle/phi/common/memory_utils.h"
+#include "paddle/phi/core/dense_tensor.h"
+#include "paddle/phi/core/enforce.h"
+#include "paddle/phi/core/scope_guard.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
+#include "paddle/phi/kernels/funcs/fc_functor.h"
+#include "paddle/phi/kernels/gpu/reduce.h"
+#include "paddle/phi/kernels/primitive/functor_primitives.h"
+#include "paddle/utils/optional.h"
 
 namespace paddle {
 namespace operators {
 
-#if CUDA_VERSION >= 11060
-
 template <typename T>
-phi::funcs::MatmulFusedType GetFwdFusedEpilogueType(
-    const phi::GPUContext& ctx,
-    const std::string& activation,
-    phi::DenseTensor* reserve_space) {
-  using FusedType = phi::funcs::MatmulFusedType;
+struct FcTypeTraits;
 
-  FusedType fused_type = FusedType::kMatmulBias;
-  if (activation != "none") {
-    if (activation == "relu") {
-      if (reserve_space == nullptr) {
-        fused_type = FusedType::kMatmulBiasRelu;
-      } else {
-        fused_type = FusedType::kMatmulBiasReluWithReservedData;
-        int64_t reserve_size =
-            SizeOf(phi::DataType::BOOL) * phi::product(reserve_space->dims());
-        ctx.Alloc(reserve_space, phi::DataType::BOOL, reserve_size);
-      }
-    } else if (activation == "gelu") {
-      if (reserve_space == nullptr) {
-        fused_type = FusedType::kMatmulBiasGelu;
-      } else {
-        fused_type = FusedType::kMatmulBiasGeluWithReservedData;
-        int64_t reserve_size = sizeof(T) * phi::product(reserve_space->dims());
-        ctx.Alloc<T>(reserve_space, reserve_size);
-      }
+template <>
+struct FcTypeTraits<float> {
+  typedef float4 Type;
+};
+
+template <>
+struct FcTypeTraits<double> {
+  typedef double4 Type;
+};
+
+struct float16_4 {
+  float16 x, y, z, w;
+};
+
+template <>
+struct FcTypeTraits<float16> {
+  typedef float16_4 Type;
+};
+
+template <typename T, bool DoRelu>
+__global__ void bias_relu_v4(const int num, const T* bias, T* data, int K) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < num) {
+    int bias_idx = tid % K;
+    const T bias_ptr = bias[bias_idx];
+    const T in_ptr = data[tid];
+    T packed_val;
+    packed_val.x = in_ptr.x + bias_ptr.x;
+    packed_val.y = in_ptr.y + bias_ptr.y;
+    packed_val.z = in_ptr.z + bias_ptr.z;
+    packed_val.w = in_ptr.w + bias_ptr.w;
+    if (DoRelu) {
+      packed_val.x = fmaxf(0.f, packed_val.x);
+      packed_val.y = fmaxf(0.f, packed_val.y);
+      packed_val.z = fmaxf(0.f, packed_val.z);
+      packed_val.w = fmaxf(0.f, packed_val.w);
+    }
+    data[tid] = packed_val;
+  }
+}
+
+template <typename T, bool DoRelu, int BlockDim>
+__global__ void InplaceAddReluKernel(const int N, const T* bias, T* data) {
+  int offset = blockIdx.x * N;
+
+  for (int i = threadIdx.x; i < N; i += BlockDim) {
+    T temp;
+#if defined(__HIPCC__) || __CUDA_ARCH__ >= 350
+    temp = __ldg(data + offset + i) + __ldg(bias + i);
+#else
+    temp = data[offset + i] + bias[i];
+#endif
+    if (DoRelu) {
+      data[offset + i] = static_cast<int>(temp > 0) * temp;
     } else {
-      PADDLE_THROW(platform::errors::InvalidArgument(
-          "fused_gemm_epilogue's activate should be one of {none, relu, gelu},"
-          " but received %s, please check",
-          activation));
+      data[offset + i] = temp;
     }
   }
-  return fused_type;
+}
+
+template <bool DoRelu, int BlockDim>
+__global__ void InplaceAddReluKernel(const int N,
+                                     const float16* bias,
+                                     float16* data) {
+  int offset = blockIdx.x * N;
+  for (int i = threadIdx.x; i < N; i += BlockDim) {
+    float16 temp;
+    temp = data[offset + i] + bias[i];
+    if (DoRelu) {
+      data[offset + i] = fmaxf(0.f, temp);
+    } else {
+      data[offset + i] = temp;
+    }
+  }
+}
+
+template <typename T>
+void AddReluKernel(
+    gpuStream_t stream, const int M, const int N, T* Y, const T* B, bool relu) {
+  if (N % 4 == 0) {
+    const int threads = 256;
+    const int num = M * N / 4;
+    const int blocks = (num + threads - 1) / threads;
+    typedef typename FcTypeTraits<T>::Type trans_type;
+    auto* bias_ptr_v4 = reinterpret_cast<const trans_type*>(B);
+    auto* data_ptr_v4 = reinterpret_cast<trans_type*>(Y);
+    if (relu) {
+      bias_relu_v4<trans_type, true><<<blocks, threads, 0, stream>>>(
+          num, bias_ptr_v4, data_ptr_v4, N / 4);
+    } else {
+      bias_relu_v4<trans_type, false><<<blocks, threads, 0, stream>>>(
+          num, bias_ptr_v4, data_ptr_v4, N / 4);
+    }
+  } else {
+    const int threads = 256;
+    const int blocks = M;
+
+    if (relu) {
+      InplaceAddReluKernel<T, true, threads>
+          <<<blocks, threads, 0, stream>>>(N, B, Y);
+    } else {
+      InplaceAddReluKernel<T, false, threads>
+          <<<blocks, threads, 0, stream>>>(N, B, Y);
+    }
+  }
+}
+
+template <>
+void AddReluKernel(gpuStream_t stream,
+                   const int M,
+                   const int N,
+                   float16* Y,
+                   const float16* B,
+                   bool relu) {
+  if (N % 4 == 0) {
+    const int threads = 256;
+    const int num = M * N / 4;
+    const int blocks = (num + threads - 1) / threads;
+    typedef typename FcTypeTraits<float16>::Type trans_type;
+    auto* bias_ptr_v4 = reinterpret_cast<const trans_type*>(B);
+    auto* data_ptr_v4 = reinterpret_cast<trans_type*>(Y);
+    if (relu) {
+      bias_relu_v4<trans_type, true><<<blocks, threads, 0, stream>>>(
+          num, bias_ptr_v4, data_ptr_v4, N / 4);
+    } else {
+      bias_relu_v4<trans_type, false><<<blocks, threads, 0, stream>>>(
+          num, bias_ptr_v4, data_ptr_v4, N / 4);
+    }
+  } else {
+    const int threads = 256;
+    const int blocks = M;
+
+    if (relu) {
+      InplaceAddReluKernel<true, threads>
+          <<<blocks, threads, 0, stream>>>(N, B, Y);
+    } else {
+      InplaceAddReluKernel<false, threads>
+          <<<blocks, threads, 0, stream>>>(N, B, Y);
+    }
+  }
 }
 
 template <typename T, typename DeviceContext>
 class FusedGemmEpilogueKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-#if CUDA_VERSION < 11060
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "The fused_gemm_epilogue operator only support CUDA 11.6 "
-        "or higher version."));
-#endif
     auto& dev_ctx = ctx.template device_context<phi::GPUContext>();
 
     const phi::DenseTensor* x = ctx.Input<phi::DenseTensor>("X");
@@ -90,29 +209,27 @@ class FusedGemmEpilogueKernel : public framework::OpKernel<T> {
     int64_t K = trans_y ? y->dims()[1] : y->dims()[0];
     int64_t N = trans_y ? y->dims()[0] : y->dims()[1];
 
-    auto fused_type =
-        GetFwdFusedEpilogueType<T>(dev_ctx, activation, reserve_space);
     void* reserve_data = reserve_space ? reserve_space->data() : nullptr;
+    VLOG(6) << "running FusedGemmEpilogueKernel on DCU";
+    auto blas = phi::funcs::GetBlas<DeviceContext, T>(dev_ctx);
+    blas.GEMM(CblasNoTrans,
+              CblasNoTrans,
+              M,
+              N,
+              K,
+              static_cast<T>(1.0),
+              x->data<T>(),
+              y->data<T>(),
+              static_cast<T>(0.0),
+              out->data<T>());
 
-    VLOG(6) << "x.shape={" << x->dims() << "}, y.shape={" << y->dims()
-            << "}, out.shape={" << out->dims() << "}, M=" << M << ", N=" << N
-            << ", K=" << K << ", trans_x=" << trans_x << ", trans_y=" << trans_y
-            << ", activation=" << activation << ", fused_type=" << fused_type
-            << ", reserve_space=" << reserve_space;
-
-    phi::funcs::LinearWithCublasLt<T>::Run(
-        dev_ctx,
-        x,
-        y,
-        out,
-        static_cast<const void*>(bias->data<T>()),
-        reserve_data,
-        M,
-        N,
-        K,
-        trans_x,
-        trans_y,
-        fused_type);
+    auto B = bias->data<T>();
+    AddReluKernel(dev_ctx.stream(),
+                  static_cast<int>(M),
+                  static_cast<int>(N),
+                  out->data<T>(),
+                  B,
+                  false);
   }
 };
 
@@ -120,11 +237,6 @@ template <typename T, typename DeviceContext>
 class FusedGemmEpilogueGradKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-#if CUDA_VERSION < 11060
-    PADDLE_THROW(phi::errors::Unimplemented(
-        "The fused_gemm_epilogue operator only support CUDA 11.6 "
-        "or higher version."));
-#endif
     auto& dev_ctx = ctx.template device_context<phi::GPUContext>();
 
     const phi::DenseTensor* dout = ctx.Input<phi::DenseTensor>("DOut");
@@ -147,29 +259,48 @@ class FusedGemmEpilogueGradKernel : public framework::OpKernel<T> {
     int64_t K = trans_y ? y->dims()[1] : y->dims()[0];
     int64_t N = trans_y ? y->dims()[0] : y->dims()[1];
 
-    VLOG(6) << "x.shape={" << x->dims() << "}, y.shape={" << y->dims()
-            << "}, dout.shape={" << dout->dims() << "}, M=" << M << ", N=" << N
-            << ", K=" << K << ", trans_x=" << trans_x << ", trans_y=" << trans_y
-            << ", activation=" << activation_grad
-            << ", reserve_space=" << reserve_space;
+    VLOG(6) << "Running FusedGemmEpilogueKernel backward on DCU";
 
-    phi::funcs::ComputeFusedGemmEpilogueBackward<T>(dev_ctx,
-                                                    dout,
-                                                    x,
-                                                    y,
-                                                    reserve_space,
-                                                    M,
-                                                    N,
-                                                    K,
-                                                    trans_x,
-                                                    trans_y,
-                                                    activation_grad,
-                                                    dx,
-                                                    dy,
-                                                    dbias);
+    auto blas = phi::funcs::GetBlas<DeviceContext, T>(dev_ctx);
+    // fc grad
+    if (dx) {
+      // dx = matmul(dz, y, None, False, True)
+      dev_ctx.Alloc<T>(dx);
+      blas.GEMM(CblasNoTrans,
+                CblasTrans,
+                M,
+                K,
+                N,
+                static_cast<T>(1.0),
+                dout->data<T>(),
+                y->data<T>(),
+                static_cast<T>(0.0),
+                dx->data<T>());
+    }
+    if (dy) {
+      dev_ctx.Alloc<T>(dy);
+      // dy = matmul(x, dz, None, True, False)
+      blas.GEMM(CblasTrans,
+                CblasNoTrans,
+                K,
+                N,
+                M,
+                static_cast<T>(1.0),
+                x->data<T>(),
+                dout->data<T>(),
+                static_cast<T>(0.0),
+                dy->data<T>());
+    }
+    // bas grad
+    if (dbias) {
+      dev_ctx.Alloc<T>(dbias);
+      //  dbias = np.sum(dz, axis=0, keepdims=False)
+      const std::vector<int64_t> reduce_dims{0};
+      phi::Reduce<T, phi::kps::AddFunctor, phi::kps::IdentityFunctor>(
+          dev_ctx, *dout, false, reduce_dims, false, dout->dtype(), dbias);
+    }
   }
 };
-#endif
 
 }  // namespace operators
 }  // namespace paddle
@@ -182,13 +313,12 @@ PD_REGISTER_STRUCT_KERNEL(fused_gemm_epilogue,
                           ops::FusedGemmEpilogueKernel,
                           float,
                           double,
-                          plat::float16,
-                          plat::bfloat16) {}
+                          plat::float16) {}
+
 PD_REGISTER_STRUCT_KERNEL(fused_gemm_epilogue_grad,
                           GPU,
                           ALL_LAYOUT,
                           ops::FusedGemmEpilogueGradKernel,
                           float,
                           double,
-                          plat::float16,
-                          plat::bfloat16) {}
+                          plat::float16) {}

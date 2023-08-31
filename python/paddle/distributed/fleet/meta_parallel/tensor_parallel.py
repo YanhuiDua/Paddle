@@ -44,3 +44,4 @@ class TensorParallel(MetaParallelBase):
     def _pre_forward(self, *inputs, **kwargs):
         logger.debug("mp start broadcast input data")
         return broadcast_input_data(self._hcg, *inputs, **kwargs)
+        # return inputs,kwargs

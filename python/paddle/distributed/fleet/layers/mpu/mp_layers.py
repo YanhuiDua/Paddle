@@ -296,13 +296,13 @@ class ColumnParallelLinear(paddle.nn.Layer):
         self.linear = F.linear
 
         if fuse_matmul_bias:
-            if not is_fused_matmul_bias_supported():
-                raise NotImplementedError(
-                    "You set fuse_matmul_bias=True in ColumnParallelLinear, "
-                    "however, the paddle you are using not support this operation. "
-                    "Please set fuse_matmul_bias=False or use paddle compiled "
-                    "with cuda 11.6 or higher."
-                )
+            # if not is_fused_matmul_bias_supported():
+            #     raise NotImplementedError(
+            #         "You set fuse_matmul_bias=True in ColumnParallelLinear, "
+            #         "however, the paddle you are using not support this operation. "
+            #         "Please set fuse_matmul_bias=False or use paddle compiled "
+            #         "with cuda 11.6 or higher."
+            #     )
             from paddle.incubate.nn.functional import fused_linear
 
             self.linear = fused_linear
@@ -469,13 +469,13 @@ class RowParallelLinear(paddle.nn.Layer):
         self.linear = F.linear
 
         if fuse_matmul_bias:
-            if not is_fused_matmul_bias_supported():
-                raise NotImplementedError(
-                    "You set fuse_matmul_bias=True in RowParallelLinear, "
-                    "however, the paddle you are using not support this operation. "
-                    "Please set fuse_matmul_bias=False or use paddle compiled "
-                    "with cuda 11.6 or higher."
-                )
+            # if not is_fused_matmul_bias_supported():
+            #     raise NotImplementedError(
+            #         "You set fuse_matmul_bias=True in RowParallelLinear, "
+            #         "however, the paddle you are using not support this operation. "
+            #         "Please set fuse_matmul_bias=False or use paddle compiled "
+            #         "with cuda 11.6 or higher."
+            #     )
             from paddle.incubate.nn.functional import fused_linear
 
             self.linear = fused_linear

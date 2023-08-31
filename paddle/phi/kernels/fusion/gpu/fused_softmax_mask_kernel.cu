@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include <algorithm>
-
+#include "paddle/phi/common/amp_type_traits.h"
 #include "paddle/phi/core/dense_tensor.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/fusion/gpu/fused_softmax_mask_utils.h"
@@ -22,9 +22,9 @@ namespace phi {
 namespace fusion {
 
 // T == fp16
-template <typename T, int pow2_index>
+template <typename T, typename MPType, int pow2_index>
 __global__ void SoftmaxMaskFuseGPUKernel(const T* x_data,
-                                         const T* mask_data,
+                                         const MPType* mask_data,
                                          T* y_data,
                                          int batch_count,
                                          int key_seq_len) {
@@ -62,7 +62,7 @@ __global__ void SoftmaxMaskFuseGPUKernel(const T* x_data,
   // using float for all inter compute
   float data[kLocalBatchSize][kLocalIterations];
   T temp_data[kOneLoadingCounts];
-  T temp_mask[kOneLoadingCounts];
+  MPType temp_mask[kOneLoadingCounts];
 
 #pragma unroll
   for (int i = 0; i < kLocalBatchSize; ++i) {
@@ -150,8 +150,9 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
                             const DenseTensor& x,
                             const DenseTensor& mask,
                             DenseTensor* out) {
+  using MPType = typename phi::dtype::MPTypeTrait<T>::Type;
   auto* x_data = x.data<T>();
-  auto* mask_data = mask.data<T>();
+  auto* mask_data = mask.data<MPType>();
   auto* y_data = dev_ctx.template Alloc<T>(out);
 
   auto x_dim = x.dims();
@@ -229,39 +230,39 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
   // launch the kernel based on the pow2_index
   switch (pow2_index) {
     case 5:  // 32
-      SoftmaxMaskFuseGPUKernel<T, 5><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 5><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 6:  // 64
-      SoftmaxMaskFuseGPUKernel<T, 6><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 6><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 7:  // 128
-      SoftmaxMaskFuseGPUKernel<T, 7><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 7><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 8:  // 256
-      SoftmaxMaskFuseGPUKernel<T, 8><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 8><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 9:  // 512
-      SoftmaxMaskFuseGPUKernel<T, 9><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 9><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 10:  // 1024
-      SoftmaxMaskFuseGPUKernel<T, 10><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 10><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 11:  // 2048
-      SoftmaxMaskFuseGPUKernel<T, 11><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 11><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 12:  // 4096
-      SoftmaxMaskFuseGPUKernel<T, 12><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 12><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     case 13:  // 8192
-      SoftmaxMaskFuseGPUKernel<T, 13><<<blocks, threads, 0, stream>>>(
+      SoftmaxMaskFuseGPUKernel<T, MPType, 13><<<blocks, threads, 0, stream>>>(
           x_data, mask_data, y_data, batch_count, key_seq_len);
       break;
     default:
@@ -277,4 +278,6 @@ PD_REGISTER_KERNEL(fused_softmax_mask,
                    ALL_LAYOUT,
                    phi::fusion::FusedSoftmaxMaskKernel,
                    float,
-                   phi::dtype::float16) {}
+                   phi::dtype::float16) {
+  kernel->InputAt(2).SetDataType(phi::DataType::FLOAT32);
+}

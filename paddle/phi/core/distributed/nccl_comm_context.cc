@@ -49,6 +49,7 @@ void NCCLCommContext::Broadcast(phi::DenseTensor* out_tensor,
   if (FLAGS_enable_nccl_dynamic_check) {
     NCCLDynamicCheck::CheckShape(*out_tensor, root, rank_, nccl_comm_);
   }
+  BroadcastStart(stream);
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::ncclBroadcast(in_tensor.data(),
                                   out_tensor->data(),
@@ -57,6 +58,7 @@ void NCCLCommContext::Broadcast(phi::DenseTensor* out_tensor,
                                   root,
                                   nccl_comm_,
                                   stream));
+  BroadcastStop(stream);
 }
 
 void NCCLCommContext::AllGather(phi::DenseTensor* out_tensor,
@@ -73,6 +75,7 @@ void NCCLCommContext::AllGather(phi::DenseTensor* out_tensor,
                                                    rank_,
                                                    nccl_comm_);
   }
+  AllGatherStart(stream);
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::ncclAllGather(in_tensor.data(),
                                   out_tensor->data(),
@@ -80,6 +83,7 @@ void NCCLCommContext::AllGather(phi::DenseTensor* out_tensor,
                                   ToNCCLDataType(in_tensor.type()),
                                   nccl_comm_,
                                   stream));
+  AllGatherStop(stream);
 }
 void NCCLCommContext::ReduceScatter(phi::DenseTensor* out_tensor,
                                     const phi::DenseTensor& in_tensor,
@@ -115,7 +119,7 @@ void NCCLCommContext::Send(const phi::DenseTensor& in_tensor,
   if (FLAGS_enable_nccl_dynamic_check) {
     NCCLDynamicCheck::CheckShape(in_tensor, rank_, rank_, nccl_comm_);
   }
-
+  SendStart(stream);
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::ncclSend(in_tensor.data(),
                              count,
@@ -123,6 +127,7 @@ void NCCLCommContext::Send(const phi::DenseTensor& in_tensor,
                              peer,
                              nccl_comm_,
                              stream));
+  SendStop(stream);
   VLOG(3) << "rank " << GetRank() << " send " << phi::product(in_tensor.dims())
           << " to " << peer;
 }
@@ -135,7 +140,7 @@ void NCCLCommContext::Recv(phi::DenseTensor* out_tensor,
   if (FLAGS_enable_nccl_dynamic_check) {
     NCCLDynamicCheck::CheckShape(*out_tensor, peer, rank_, nccl_comm_);
   }
-
+  RecvStart(stream);
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::ncclRecv(out_tensor->data(),
                              count,
@@ -143,6 +148,7 @@ void NCCLCommContext::Recv(phi::DenseTensor* out_tensor,
                              peer,
                              nccl_comm_,
                              stream));
+  RecvStop(stream);
   VLOG(3) << "rank " << GetRank() << " recv "
           << phi::product(out_tensor->dims()) << " from " << peer;
 }
@@ -162,6 +168,7 @@ void NCCLCommContext::AllReduce(phi::DenseTensor* out_tensor,
                                                    rank_,
                                                    nccl_comm_);
   }
+  AllReduceStart(stream);
   PADDLE_ENFORCE_GPU_SUCCESS(
       phi::dynload::ncclAllReduce(in_tensor.data(),
                                   out_tensor->data(),
@@ -170,6 +177,7 @@ void NCCLCommContext::AllReduce(phi::DenseTensor* out_tensor,
                                   reduce_type,
                                   nccl_comm_,
                                   stream));
+  AllReduceStop(stream);
 }
 
 void NCCLCommContext::Reduce(phi::DenseTensor* out_tensor,

@@ -11,12 +11,33 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
-
+#ifdef PADDLE_WITH_CUDA
 #include "paddle/fluid/operators/fused/fused_multi_transformer_op.cu.h"
+#endif
 
+#ifdef PADDLE_WITH_HIP
+#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/framework/operator.h"
+#include "paddle/phi/api/include/tensor.h"
+#include "paddle/phi/backends/gpu/gpu_device_function.h"
+#endif
 namespace paddle {
 namespace operators {
 
+#ifdef PADDLE_WITH_HIP
+template <typename T, typename DeviceContext>
+class FusedMultiTransformerOpKernel : public framework::OpKernel<T> {
+ public:
+  void Compute(const framework::ExecutionContext &ctx) const override {
+    auto &dev_ctx = ctx.template device_context<DeviceContext>();
+    auto *out = ctx.Output<phi::DenseTensor>("Out");
+    dev_ctx.template Alloc<T>(out, out->numel() * sizeof(T));
+    LOG(WARNING) << "Not implemented, only for model export";
+  }
+};
+#endif
+
+#ifdef PADDLE_WITH_CUDA
 #if CUDA_VERSION >= 11060  // Use cublasLt to fuse FFN operation.
 
 template <typename T, typename DeviceContext>
@@ -1364,7 +1385,7 @@ class FusedMultiTransformerOpKernel : public framework::OpKernel<T> {
 };
 
 #endif  // CUDA_VERSION >= 11060
-
+#endif
 }  // namespace operators
 }  // namespace paddle
 

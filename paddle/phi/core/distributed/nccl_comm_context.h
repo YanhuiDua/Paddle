@@ -79,3 +79,18 @@ class NCCLCommContext final : public CommContext {
 
 }  // namespace distributed
 }  // namespace phi
+
+void AllReduceStart(hipStream_t stream);
+void AllReduceStop(hipStream_t stream);
+
+void AllGatherStart(hipStream_t stream);
+void AllGatherStop(hipStream_t stream);
+
+void BroadcastStart(hipStream_t stream);
+void BroadcastStop(hipStream_t stream);
+
+void SendStart(hipStream_t stream);
+void SendStop(hipStream_t stream);
+
+void RecvStart(hipStream_t stream);
+void RecvStop(hipStream_t stream);

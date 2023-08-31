@@ -75,6 +75,9 @@ inline paddle::Tensor AmpAutoCast(const std::string& input_name,
       input_name != "X") {
     return input;
   }
+  if (op_name == "fused_softmax_mask" && input_name == "Mask") {
+    return input;
+  }
   if (dst_dtype == phi::DataType::FLOAT16) {
     if (op_name == "run_program") {
       return input;

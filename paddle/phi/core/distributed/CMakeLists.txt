@@ -10,6 +10,8 @@ endif()
 
 if(WITH_GLOO)
   list(APPEND DISTRIBUTED_COMMON_SRCS gloo_utils.cc gloo_comm_context.cc)
+  list(APPEND DISTRIBUTED_COMMON_SRCS gloo_utils.cc gloo_comm_context.cc
+       nccl_dummy_kernel.cu)
 endif()
 
 collect_srcs(core_srcs SRCS ${DISTRIBUTED_COMMON_SRCS})

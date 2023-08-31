@@ -270,7 +270,8 @@ class FusedMultiTransformerOpOpMaker
         .SetDefault("gelu")
         .AddCustomChecker([](const std::string &act_type) {
           PADDLE_ENFORCE_EQ(
-              act_type == "gelu" || act_type == "relu" || act_type == "none",
+              act_type == "gelu" || act_type == "relu" || act_type == "none" ||
+                  act_type == "swiglu",
               true,
               platform::errors::InvalidArgument(
                   "Only support `gelu`, `relu`, `none` activation in "

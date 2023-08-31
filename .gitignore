@@ -58,6 +58,8 @@ bazel-*
 
 
 build_*
+build-*
+
 # clion workspace.
 cmake-build-*
 paddle/fluid/operators/distributed/send_recv.proto
