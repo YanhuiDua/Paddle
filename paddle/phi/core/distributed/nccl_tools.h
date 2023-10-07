@@ -52,6 +52,17 @@ namespace distributed {
     }                                                                       \
   } while (0)
 
+#define HIP_CHECK(expr)                                                    \
+  do {                                                                      \
+    gpuError_t r = expr;                                                   \
+    if (r != gpuSuccess) {                                                 \
+      PADDLE_THROW(phi::errors::External("Failed, cuda error %s:%d '%s'\n", \
+                                         __FILE__,                          \
+                                         __LINE__,                          \
+                                         hipGetErrorString(r)));           \
+    }                                                                       \
+  } while (0)
+
 ncclRedOp_t ToNCCLRedType(ReduceOp reduction);
 
 std::string SerializeNCCLUniqueId(const ncclUniqueId& ncclID);

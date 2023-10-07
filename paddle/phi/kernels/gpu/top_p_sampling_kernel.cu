@@ -14,10 +14,16 @@
 
 #include "paddle/phi/kernels/top_p_sampling_kernel.h"
 
+#ifdef __NVCC__
 #include <cuda_fp16.h>
 #include <curand_kernel.h>
-
-#include "cub/cub.cuh"
+#include <cub/cub.cuh>
+#endif
+#ifdef __HIPCC__
+#include <hiprand_kernel.h>
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#endif
 #include "paddle/fluid/operators/kernel_primitives/functor_primitives.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/backends/gpu/gpu_device_function.h"
@@ -109,12 +115,20 @@ struct Pair {
 
 inline int div_up(int a, int n) { return (a + n - 1) / n; }
 
+#ifdef __NVCC__
 __global__ void setup_kernel(curandState_t* state,
+#else
+__global__ void setup_kernel(hiprandState_t* state,
+#endif
                              const uint64_t seed,
                              const int bs) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = idx; i < bs; i += gridDim.x * blockDim.x) {
+#ifdef __NVCC__
     curand_init(seed, i, 0, &state[i]);
+#else
+    hiprand_init(seed, i, 0, &state[i]);
+#endif
   }
 }
 
@@ -261,11 +275,18 @@ __device__ __forceinline__ void BlockReduce(Pair<T> shared_max[],
     if (MaxLength < 5) {
       if (*beam >= MaxLength) break;
     } else {
+#ifdef PADDLE_WITH_HIP
+      unsigned long long int mask = 0u;
+      mask = __ballot(true);
+      if (tid_max / 32 == wid) {
+        if (__shfl_down(*beam, tid_max % 32, 32) == MaxLength) break;
+#else
       unsigned mask = 0u;
       mask = __ballot_sync(FINAL_MASK, true);
       if (tid_max / 32 == wid) {
         if (__shfl_down_sync(FINAL_MASK, *beam, tid_max % 32, 32) == MaxLength)
           break;
+#endif
       }
     }
   }
@@ -278,7 +299,11 @@ __global__ void KeMatrixTopPBeamTopK(const T* src,
                                      int64_t* out_id,  // topk id
                                      T* out_val,       // topk val
                                      int vocab_size,
+#ifdef __NVCC__                                     
                                      curandState_t* state,
+#else
+                                     hiprandState_t* state,
+#endif
                                      int* count_iter,
                                      int* count_iter_begin) {
   const int tid = threadIdx.x;
@@ -324,7 +349,11 @@ __global__ void KeMatrixTopPBeamTopK(const T* src,
   }
   if (tid == 0) {
     count_iter_begin[bid] = count_iter[bid];
+#ifdef PADDLE_WITH_HIP
+    float rand_top_p = hiprand_uniform(state + bid) * top_p_num;
+#else
     float rand_top_p = curand_uniform(state + bid) * top_p_num;
+#endif
     top_ps[bid] = (T)rand_top_p;
     float sum_prob = 0.0f;
 
@@ -472,8 +501,11 @@ __global__ void topp_sampling(T* sorted_probs,
     BlockScan(temp_storage)
         .InclusiveSum(thread_count, thread_offset, prefix_op);
 
-    uint32_t activate_mask = __ballot_sync(FINAL_MASK, rand_p <= thread_offset);
-
+#ifdef PADDLE_WITH_HIP
+    uint32_t activate_mask = __ballot(rand_p <= thread_offset);
+#else
+    uint32_t activate_mask = __ballot(FINAL_MASK, rand_p <= thread_offset);
+#endif
     i_activate = i;
     if (activate_mask != 0) {
       if (lane_id == 0) {
@@ -510,9 +542,15 @@ __global__ void topp_sampling(T* sorted_probs,
         // don't sample low score token
         int max_id =
             BlockReduce(temp_storage_reduce).Reduce(threshold_id, MaxOp<int>());
+#ifdef PADDLE_WITH_HIP
+        hiprandStatePhilox4_32_10_t rng;
+        hiprand_init(seed, tid, 0, &rng);
+        int random_id = hiprand(&rng) % (max_id + 1);
+#else
         curandStatePhilox4_32_10_t rng;
         curand_init(seed, tid, 0, &rng);
         int random_id = curand(&rng) % (max_id + 1);
+#endif
         out_id[bid] = sorted_id[offset + random_id];
         out_val[bid] = sorted_probs[offset + random_id];
       } else {
@@ -614,21 +652,34 @@ void TopPSamplingKernel(const Context& dev_ctx,
       PD_THROW("the input data shape has error in the FillIndex kernel.");
   }
 
+#ifdef __NVCC__  
   curandState_t* dev_curand_states;
+#else
+  hiprandState_t* dev_curand_states;
+#endif
   phi::Allocator::AllocationPtr curand_states_buf{nullptr};
   curand_states_buf = phi::memory_utils::Alloc(
       dev_ctx.GetPlace(),
+#ifdef __NVCC__
       bs * sizeof(curandState_t),
+#else
+      bs * sizeof(hiprandState_t),      
+#endif      
       phi::Stream(reinterpret_cast<phi::StreamId>(dev_ctx.stream())));
   dev_curand_states =
+#ifdef __NVCC__  
       reinterpret_cast<curandState_t*>(curand_states_buf->ptr());
+#else
+      reinterpret_cast<hiprandState_t*>(curand_states_buf->ptr());
+#endif 
   unsigned int seed = 0;
   if (random_seed == -1) {
-    rand_r(&seed);
-    setup_kernel<<<1, 256, 0, cu_stream>>>(dev_curand_states, seed, bs);
+    srand((unsigned int)(time(NULL)));
+    seed = rand();
   } else {
     seed = random_seed;
   }
+  setup_kernel<<<1, 256, 0, cu_stream>>>(dev_curand_states, seed, bs);
 
   DenseTensor count_iter;
   count_iter.Resize(phi::make_ddim({bs + 1}));

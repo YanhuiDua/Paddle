@@ -63,14 +63,18 @@ class NCCLCommTask : public CommTask {
   void StartRecord();
   void EndRecord();
 
-  bool CudaEventQuery(cudaEvent_t event);
+  bool CudaEventQuery(gpuEvent_t event);
 
  protected:
   std::mutex mutex_;
   std::chrono::milliseconds timeout_;
 
+#ifdef __NVCC__
   unsigned int cuda_event_flags_ = cudaEventDisableTiming;
+#else
+  unsigned int cuda_event_flags_ = hipEventDisableTiming;
 
+#endif 
   bool sync_op_;
   bool use_calc_stream_;
 
@@ -79,8 +83,8 @@ class NCCLCommTask : public CommTask {
 
   bool start_event_created_;
   bool end_event_created_;
-  cudaEvent_t nccl_start_event_;
-  cudaEvent_t nccl_end_event_;
+  gpuEvent_t nccl_start_event_;
+  gpuEvent_t nccl_end_event_;
 
   std::exception_ptr exception_;
 

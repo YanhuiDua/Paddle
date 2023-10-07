@@ -884,7 +884,7 @@ static bool CreatePreMulScaleOpIfSupported(ncclDataType_t dtype,
                                            ncclComm_t comm,
                                            const void *scale,
                                            ncclRedOp_t *op) {
-#if NCCL_VERSION_CODE >= 21100
+#if PADDLE_WITH_CUDA && NCCL_VERSION_CODE >= 21100
   int ver;
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGetVersion(&ver));
   if (ver >= 21100) {
@@ -965,7 +965,7 @@ static void NCCLSumWithScaleBase(const T *sendbuff,
         sendbuff, recvbuff, recvcount, dtype, op, comm, stream));
   }
 
-#if NCCL_VERSION_CODE >= 21100
+#if PADDLE_WITH_CUDA && NCCL_VERSION_CODE >= 21100
   if (should_destroy_op) {
     VLOG(10) << "ncclRedOpDestroy starts";
     PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclRedOpDestroy(op, comm));

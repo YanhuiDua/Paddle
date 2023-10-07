@@ -479,7 +479,7 @@ def start_local_trainers(
 
         logger.debug(f"trainer proc env:{current_env}")
 
-        cmd = [sys.executable, "-u", training_script] + training_script_args
+        cmd = [sys.executable, training_script] + training_script_args
 
         logger.info(f"start trainer proc:{cmd} env:{proc_env}")
 

@@ -126,7 +126,11 @@ void ProcessGroupNCCL::GroupEnd() {
   // NOTE: This is to sync the calc stream and comm stream for debug using
   // batch_isend_irecv
   if (FLAGS_benchmark || FLAGS_benchmark_nccl) {
+#ifdef __NVCC__    
     PADDLE_ENFORCE_GPU_SUCCESS(cudaDeviceSynchronize());
+#else
+    PADDLE_ENFORCE_GPU_SUCCESS(hipDeviceSynchronize());
+#endif
   }
 }
 
@@ -933,7 +937,11 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupNCCL::Collective(
   }
 
   if (FLAGS_benchmark || FLAGS_benchmark_nccl) {
+#ifdef __NVCC__    
     PADDLE_ENFORCE_GPU_SUCCESS(cudaDeviceSynchronize());
+#else
+    PADDLE_ENFORCE_GPU_SUCCESS(hipDeviceSynchronize());
+#endif
   }
 
   return task;
@@ -1023,7 +1031,11 @@ std::shared_ptr<ProcessGroup::Task> ProcessGroupNCCL::Point2Point(
   }
 
   if (!is_batch_p2p && (FLAGS_benchmark || FLAGS_benchmark_nccl)) {
+#ifdef __NVCC__    
     PADDLE_ENFORCE_GPU_SUCCESS(cudaDeviceSynchronize());
+#else
+    PADDLE_ENFORCE_GPU_SUCCESS(hipDeviceSynchronize());
+#endif
   }
 
   return task;

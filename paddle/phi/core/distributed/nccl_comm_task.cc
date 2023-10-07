@@ -52,34 +52,63 @@ NCCLCommTask::NCCLCommTask(const phi::Place& place,
 void NCCLCommTask::StartRecord() {
   backends::gpu::GPUDeviceGuard guard(place_.device);
   if (!start_event_created_) {
+#ifdef __NVCC__    
     CUDA_CHECK(cudaEventCreateWithFlags(&nccl_start_event_, cuda_event_flags_));
+#else
+    HIP_CHECK(hipEventCreateWithFlags(&nccl_start_event_, cuda_event_flags_));
+#endif
     start_event_created_ = true;
   }
+#ifdef __NVCC__  
   CUDA_CHECK(cudaEventRecord(nccl_start_event_, nccl_stream_));
+#else
+  HIP_CHECK(hipEventRecord(nccl_start_event_, nccl_stream_));
+#endif
 }
 void NCCLCommTask::EndRecord() {
   backends::gpu::GPUDeviceGuard guard(place_.device);
   if (!end_event_created_) {
+#ifdef __NVCC__
     CUDA_CHECK(cudaEventCreateWithFlags(&nccl_end_event_, cuda_event_flags_));
+#else
+    HIP_CHECK(hipEventCreateWithFlags(&nccl_end_event_, cuda_event_flags_));
+#endif 
     end_event_created_ = true;
   }
+#ifdef __NVCC__  
   CUDA_CHECK(cudaEventRecord(nccl_end_event_, nccl_stream_));
+#else
+  HIP_CHECK(hipEventRecord(nccl_end_event_, nccl_stream_));
+#endif
 }
 
-bool NCCLCommTask::CudaEventQuery(cudaEvent_t event) {
-  cudaError_t ret = cudaEventQuery(event);
-  if (ret == cudaSuccess) {
+bool NCCLCommTask::CudaEventQuery(gpuEvent_t event) {
+#ifdef __NVCC__
+  gpuError_t ret = cudaEventQuery(event);
+#else
+  gpuError_t ret = hipEventQuery(event);
+#endif
+  if (ret == gpuSuccess) {
     return true;
-  } else if (ret != cudaErrorNotReady) {
+  } else if (ret != gpuErrorNotReady) {
+#ifdef __NVCC__   
     CUDA_CHECK(ret);
   } else {
     // ignore and clear the error if not ready
     CUDA_CHECK(cudaGetLastError());
   }
+#else 
+    HIP_CHECK(ret); 
+  } else {
+    // ignore and clear the error if not ready
+    HIP_CHECK(hipGetLastError());
+  }
+#endif
   return false;
 }
 
 void NCCLCommTask::CheckAndSetException() {
+  #ifdef __NVCC__
   if (GetException()) {
     return;
   }
@@ -90,9 +119,11 @@ void NCCLCommTask::CheckAndSetException() {
     LOG(ERROR) << "Found async exception when checking for nccl errors: " +
                       GetExceptionMsgFromExceptionPtr(exception_);
   }
+  #endif
 }
 
 std::string GetNCCLErrorDetail(ncclResult_t result) {
+  #ifdef __NVCC__
   std::string detail;
   std::string last_error;
 #ifdef ENABLE_NCCL_GET_LAST_ERROR
@@ -135,9 +166,11 @@ std::string GetNCCLErrorDetail(ncclResult_t result) {
       detail = "Unknown NCCL error!";
   }
   return detail + last_error;
+  #endif
 }
 
 std::exception_ptr NCCLCommTask::CheckCommErrors() {
+  #ifdef __NVCC__
   ncclResult_t nccl_async_error;
   std::unique_lock<std::mutex> lock(mutex_);
   NCCL_CHECK(
@@ -148,6 +181,7 @@ std::exception_ptr NCCLCommTask::CheckCommErrors() {
         "task info: " + GetTraceMsg()));
   }
   return nullptr;
+  #endif
 }
 
 bool NCCLCommTask::IsStarted() { return CudaEventQuery(nccl_start_event_); }
@@ -179,6 +213,7 @@ std::exception_ptr NCCLCommTask::GetException() {
 }
 
 void NCCLCommTask::AbortComm() {
+  #ifdef __NVCC__
   std::unique_lock<std::mutex> lock(mutex_);
   if (aborted_) {
     return;
@@ -188,6 +223,7 @@ void NCCLCommTask::AbortComm() {
   aborted_ = true;
   nccl_comm_ = nullptr;
   return;
+  #endif
 }
 
 std::string NCCLCommTask::GetTraceMsg() {

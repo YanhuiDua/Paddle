@@ -30,6 +30,7 @@ limitations under the License. */
 #include "paddle/fluid/platform/place.h"
 #include "paddle/fluid/platform/profiler/mem_tracing.h"
 #include "paddle/fluid/string/split.h"
+#include "paddle/fluid/memory/malloc.h"
 #include "paddle/phi/backends/gpu/gpu_info.h"
 #include "paddle/phi/core/flags.h"
 
@@ -430,7 +431,7 @@ bool IsGpuMallocRecorded(int dev_id) {
 void EmptyCache(void) {
   std::vector<int> devices = GetSelectedDevices();
   for (auto device : devices) {
-    memory::Release(CUDAPlace(device));
+    // memory::Release(platform::CUDAPlace(device));
   }
 }
 

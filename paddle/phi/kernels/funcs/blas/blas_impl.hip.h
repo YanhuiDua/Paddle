@@ -999,7 +999,7 @@ inline void Blas<phi::GPUContext>::GEMM(bool transA,
                                         int ldc) const {
   // Note that cublas follows fortran order, so the order is different from
   // the cblas convention.
-  rocblas_operation cuTransA =
+   rocblas_operation cuTransA =
       transA ? rocblas_operation_none : rocblas_operation_transpose;
   rocblas_operation cuTransB =
       transB ? rocblas_operation_none : rocblas_operation_transpose;
@@ -1045,7 +1045,6 @@ inline void Blas<phi::GPUContext>::GEMM(bool transA,
 }
 
 template <>
->>>>>>> 09ed607108... [cherry-pick] Fix compilation errors on dtk23.04 (#56533)
 template <typename T>
 void Blas<phi::GPUContext>::AXPY(int n, T alpha, const T *x, T *y) const {
   context_.CublasCall([&](rocblas_handle handle) {
