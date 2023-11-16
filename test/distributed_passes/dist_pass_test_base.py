@@ -214,7 +214,6 @@ class DistPassTestBase(unittest.TestCase):
             cmd = (
                 [
                     sys.executable,
-                    "-u",
                 ]
                 + coverage_args
                 + [

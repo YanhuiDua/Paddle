@@ -210,7 +210,7 @@ class Controller(ControllerBase):
 
     def _get_entrypoint(self):
         if self.ctx.args.training_script.endswith('.py'):
-            entrypoint = [sys.executable, "-u", self.ctx.args.training_script]
+            entrypoint = [sys.executable, self.ctx.args.training_script]
         else:
             entrypoint = [self.ctx.args.training_script]
 

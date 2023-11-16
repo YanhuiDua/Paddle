@@ -314,7 +314,7 @@ def launch():
 
         # copy training script args
         if ctx.args.training_script.endswith('.py'):
-            entrypoint = [sys.executable, "-u", ctx.args.training_script]
+            entrypoint = [sys.executable, ctx.args.training_script]
         else:
             entrypoint = [ctx.args.training_script]
         entrypoint.extend(ctx.args.training_script_args)

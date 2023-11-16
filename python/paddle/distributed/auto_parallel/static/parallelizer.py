@@ -412,7 +412,7 @@ class AutoParallelizer:
                 + original_cmd_args
             )
             new_cmd = (
-                [sys.executable, "-u"]
+                [sys.executable]
                 + coverage_args
                 + shlex.split(new_cmd_args)
             )

@@ -560,7 +560,7 @@ def start_local_trainers(
         ):
             coverage_args = ["-m", "coverage", "run", "--branch", "-p"]
         cmd = (
-            [sys.executable, "-u"]
+            [sys.executable]
             + coverage_args
             + [training_script]
             + training_script_args
@@ -833,7 +833,6 @@ def direct_start(args):
     # run ps-cpu mode on paddlecloud, using given envs
     cmd = [
         sys.executable,
-        "-u",
         args.training_script,
     ] + args.training_script_args
     proc = subprocess.Popen(cmd)
@@ -1676,7 +1675,6 @@ class ParameterServerLauncher:
 
             cmd = [
                 sys.executable,
-                "-u",
                 args.training_script,
             ] + args.training_script_args
             self.cmds["server"].append(cmd)
@@ -1784,7 +1782,6 @@ class ParameterServerLauncher:
             current_env.update(proc_env)
             cmd = [
                 sys.executable,
-                "-u",
                 args.training_script,
             ] + args.training_script_args
             self.cmds["worker"].append(cmd)
@@ -1852,7 +1849,6 @@ class ParameterServerLauncher:
             current_env.update(proc_env)
             cmd = [
                 sys.executable,
-                "-u",
                 args.training_script,
             ] + args.training_script_args
             self.cmds["coordinator"].append(cmd)
@@ -1943,7 +1939,6 @@ class ParameterServerLauncher:
 
             cmd = [
                 sys.executable,
-                "-u",
                 args.training_script,
             ] + args.training_script_args
             self.cmds["heter_worker"].append(cmd)

@@ -705,7 +705,7 @@ class _DataLoaderIterMultiProcess(_DataLoaderIterBase):
                 if len(failed_workers) > 0:
                     self._exit_thread_unexpectedly()
                     pids = ', '.join(str(w.pid) for w in failed_workers)
-                    raise RuntimeError(
+                    logging.warning(
                         "DataLoader {} workers exit unexpectedly, "
                         "pids: {}".format(len(failed_workers), pids)
                     )

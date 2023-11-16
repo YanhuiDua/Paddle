@@ -886,7 +886,9 @@ def fused_multi_transformer(
     ffn2_biases,
     pre_layer_norm=True,
     epsilon=1e-05,
+    residual_alpha=1.0,
     cache_kvs=None,
+    beam_offset=None,
     pre_caches=None,
     seq_lens=None,
     rotary_embs=None,
@@ -899,7 +901,9 @@ def fused_multi_transformer(
     mode='upscale_in_train',
     trans_qkvw=True,
     ring_id=-1,
-    name=None,
+    norm_type="layernorm",
+    use_neox_rotary_style=False,
+    name=None
 ):
     r"""
     This is a fusion operator to compute multi transformer layers in transformer model architecture.
@@ -1057,6 +1061,7 @@ def fused_multi_transformer(
             cache_kvs,
             pre_caches,
             rotary_embs,
+            beam_offset,
             time_step,
             seq_lens,
             attn_mask,
@@ -1073,6 +1078,8 @@ def fused_multi_transformer(
             pre_layer_norm,
             'epsilon',
             epsilon,
+            'residual_alpha',
+            residual_alpha,
             'dropout_rate',
             dropout_rate,
             'rotary_emb_dims',
@@ -1087,6 +1094,10 @@ def fused_multi_transformer(
             trans_qkvw,
             'ring_id',
             ring_id,
+            'norm_type', 
+            norm_type, 
+            'use_neox_rotary_style', 
+            use_neox_rotary_style
         )
         if cache_kvs is not None:
             return final_out, cache_kv_out
@@ -1096,18 +1107,20 @@ def fused_multi_transformer(
         dtype = x.dtype
         # check dtypes
         check_variable_and_dtype(
-            x, 'x', ['float16', 'float32'], 'fused_multi_transformer'
+            x, 'x', ['uint16', 'float16', 'float32'], 'fused_multi_transformer'
         )
         check_dtype(
-            dtype, 'dtype', ['float16', 'float32'], 'fused_multi_transformer'
+            dtype, 'dtype', ['uint16', 'float16', 'float32'], 'fused_multi_transformer'
         )
 
         # set inputs
         inputs = {}
         inputs['X'] = [x]
         inputs['LnScale'] = ln_scales
-        inputs['LnBias'] = ln_biases
         inputs['QKVW'] = qkv_weights
+
+        if ln_biases is not None: 
+            inputs['LnBias'] = ln_biases
         if qkv_biases is not None:
             inputs['QKVBias'] = qkv_biases
         if cache_kvs is not None:
@@ -1117,10 +1130,276 @@ def fused_multi_transformer(
                 inputs['TimeStep'] = time_step
         if pre_caches is not None:
             inputs['PreCaches'] = pre_caches
+        if beam_offset is not None:
+            inputs['BeamCacheOffset'] = beam_offset
         if rotary_emb_dims > 0:
             inputs['RotaryPosEmb'] = rotary_embs
         inputs['SeqLengths'] = seq_lens
         inputs['SrcMask'] = attn_mask
+        inputs['OutLinearW'] = linear_weights
+        if linear_biases is not None:
+            inputs['OutLinearBias'] = linear_biases
+
+        inputs['FFNLnScale'] = ffn_ln_scales
+        if ffn_ln_biases is not None: 
+            inputs['FFNLnBias'] = ffn_ln_biases
+        inputs['FFN1Weight'] = ffn1_weights
+        if ffn1_biases is not None:
+            inputs['FFN1Bias'] = ffn1_biases
+        inputs['FFN2Weight'] = ffn2_weights
+        if ffn2_biases is not None:
+            inputs['FFN2Bias'] = ffn2_biases
+
+        # set attrs
+        attrs = {
+            'pre_layer_norm': pre_layer_norm,
+            'epsilon': epsilon,
+            'residual_alpha': residual_alpha,
+            'dropout_rate': dropout_rate,
+            'rotary_emb_dims': rotary_emb_dims,
+            'is_test': not training,
+            'dropout_implementation': mode,
+            'act_method': activation,
+            'trans_qkvw': trans_qkvw,
+            'ring_id': ring_id,
+            'norm_type': norm_type,
+            'use_neox_rotary_style': use_neox_rotary_style,
+        }
+
+        outputs = {}
+        final_out = helper.create_variable_for_type_inference(dtype=dtype)
+        outputs['Out'] = final_out
+        if cache_kvs:
+            # NOTE: inplace
+            outputs['CacheKVOut'] = cache_kvs
+
+        helper.append_op(
+            type='fused_multi_transformer',
+            inputs=inputs,
+            outputs=outputs,
+            attrs=attrs,
+        )
+
+        return (final_out, cache_kvs) if cache_kvs else final_out
+
+
+def fused_multi_transformer_dybatch(
+    x,
+    ln_scales,
+    ln_biases,
+    qkv_weights,
+    qkv_biases,
+    linear_weights,
+    linear_biases,
+    ffn_ln_scales,
+    ffn_ln_biases,
+    ffn1_weights,
+    ffn1_biases,
+    ffn2_weights,
+    ffn2_biases,
+    pre_layer_norm=True,
+    epsilon=1e-05,
+    cache_kvs=None,
+    pre_caches=None,
+    cum_offsets=None,
+    padding_offset=None,
+    seq_lens_this_time=None,
+    seq_lens_encoder=None,
+    seq_lens_decoder=None,
+    cu_seqlens_q=None,
+    cu_seqlens_k=None,
+    cache_k_scales=None,
+    cache_v_scales=None,
+    cache_k_out_scales=None,
+    cache_v_out_scales=None,
+    rotary_embs=None,
+    src_mask=None,
+    tgt_mask=None,
+    block_size=128,
+    block_tables=None,
+    dropout_rate=0.0,
+    rotary_emb_dims=0,
+    activation="gelu",
+    training=False,
+    norm_type="layernorm",
+    use_neox_rotary_style=False,
+    mode='upscale_in_train',
+    trans_qkvw=True,
+    ring_id=-1,
+    max_input_length=-1,
+    name=None
+):
+    r"""
+    This is a fusion operator to compute multi transformer layers in transformer model architecture.
+
+    Args:
+        x (Tensor): the input tensor could be 3-D tensor, the input data type could be float16 or float32, the shape is `[token\_num, d\_model]`.
+        ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of attention layer_norm, the shape is `[d\_model]`.
+        ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of attention layer_norm. the shape is `[d\_model]`.
+        qkv_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention qkv computation. The shape is `[3, num\_head, dim\_head, d\_model]`.
+        qkv_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention qkv computation. The shape is `[3, num\_head, dim\_head]`.
+        linear_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention linear. The shape is `[num\_head * dim\_head, d\_model]`.
+        linear_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention linear. The shape is `[d\_model]`.
+        ffn_ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward layer_norm, the shape is `[d\_model]`
+        ffn_ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of feedforward layer_norm, the shape is `[d\_model]`
+        ffn1_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward first linear, the shape is `[d\_model, dim\_feedforward]`.
+        ffn1_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward first linear, the shape is `[dim\_feedforward]`.
+        ffn2_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward second linear, the shape is `[dim\_feedforward, d\_model]`.
+        ffn2_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward second linear, the shape is `[d_model]`.
+        pre_layer_norm (bool, optional): whether it is pre_layer_norm(True) or post_layer_norm(False). Default True.
+        epsilon (float, optional): Small float value added to denominator of the layer_norm to avoid dividing by zero. Default is 1e-5.
+        cache_kvs (list(Tensor)|tuple(Tensor), optional): The cache structure tensors for the generation model. The shape is `[2, bsz, num\_head, max\_seq\_len, head\_dim]`. Default None.
+        pre_caches (list(Tensor)|tuple(Tensor), optional): The prefix caches for the generation model. The shape is `[2, bsz, num\_head, cache\_len, head\_dim]`. Default None.
+        cum_offsets (Tensor): The cumsum offsets to report the mapping relationship from src_seq_id to tgt_seq_id. The shape is `[bsz, 1]`.
+        padding_offset (Tensor): The padding offset to report the mapping relationship from tgt_seq_id to src_seq_id. The shape is `[token\_num]`.
+        seq_lens_this_time (Tensor): The sequence lengths of this time. The shape is `[bsz]`.
+        seq_lens_encoder (Tensor): The sequence lengths of the encoder this time. The shape is `[bsz]`.
+        seq_lens_decoder (Tensor): The sequence lengths of the decoder this time. The shape is `[bsz]`.
+        rotary_embs (Tensor optional): The RoPE embs for rotary computation. The shape is `[2, bsz, 1, seq\_len, head\_dim]`. Default None.
+        src_mask (Tensor, optional):  A tensor used in multi-head attention to prevents attention to
+            some unwanted positions, usually used in encoder. It is a tensor
+            with shape `[batch_size, 1, sequence_length, sequence_length]`. Default None.
+        tgt_mask (Tensor, optional):  A tensor used in multi-head attention to prevents attention to
+            some unwanted positions, usually used in decoder. It is a tensor
+            with shape `[batch_size, 1, 1, sequence_length]`. Default None.
+        dropout_rate (float, optional): The dropout probability of setting units to zero. Default 0.0.
+        rotary_emb_dims (int, optional): The rotary_emb_dims of rotary computation, and it is 0 when rotary_embs is None,
+            1 when rotary_embs is not None and pos_extra_ids is None, 2 when rotary_embs and pos_extra_ids are both not None. Default 0.
+        activation (str, optional): The activation. Default "gelu".
+        training (bool, optional): A flag indicating whether it is in train phrase or not. Default False.
+        mode (str, optional): ['upscale_in_train'(default) | 'downscale_in_infer']
+
+                               1. upscale_in_train(default), upscale the output at training time
+
+                                  - train: out = input * mask / ( 1.0 - p )
+                                  - inference: out = input
+
+                               2. downscale_in_infer, downscale the output at inference
+
+                                  - train: out = input * mask
+                                  - inference: out = input * (1.0 - p)
+        trans_qkvw (bool, optional): Whether to transpose for weights of qkv.
+            If true, the shape eights of qkv should be [3, num_head, dim_head, dim_embed].
+            Otherwise the shape of weights of qkv should be [dim_embed, 3, num_head, dim_head]. Default True.
+        ring_id (int, optional): For distributed forward in tensor model parallel, only support NCCL. Default is -1, means not using mp.
+        max_input_length (int): The max input length of padded inputs.
+        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+
+    Returns:
+        Tensor|tuple: If `cache_kvs` is None, return a tensor that has
+        the same shape and data type with `x`, representing the output
+        of Transformer layers. If `cache_kvs` is not None, return the
+        tuple (output, cache_kvs), which output is the output of
+        Transformer layers, cache_kvs is inplace with input `cache_kvs`.
+    """
+    if mode not in ('downscale_in_infer', 'upscale_in_train'):
+        raise ValueError(
+            "mode argument should be 'downscale_in_infer' or 'upscale_in_train'"
+        )
+    mode = (
+        'downgrade_in_infer' if mode == 'downscale_in_infer' else mode
+    )  # semantic transfer
+
+    if in_dynamic_mode():
+        cache_kv_out, final_out = _legacy_C_ops.fused_multi_transformer_dybatch(
+            x,
+            ln_scales,
+            ln_biases,
+            qkv_weights,
+            qkv_biases,
+            cache_kvs,
+            pre_caches,
+            rotary_embs,
+            cum_offsets,
+            padding_offset,
+            seq_lens_this_time,
+            seq_lens_encoder,
+            seq_lens_decoder,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            src_mask,
+            tgt_mask,
+            block_tables,
+            linear_weights,
+            linear_biases,
+            ffn_ln_scales,
+            ffn_ln_biases,
+            ffn1_weights,
+            ffn1_biases,
+            ffn2_weights,
+            ffn2_biases,
+            cache_k_scales,
+            cache_v_scales,
+            cache_k_out_scales,
+            cache_v_out_scales,
+            cache_kvs,
+            'pre_layer_norm',
+            pre_layer_norm,
+            'epsilon',
+            epsilon,
+            'dropout_rate',
+            dropout_rate,
+            'rotary_emb_dims',
+            rotary_emb_dims,
+            'max_input_length',
+            max_input_length,
+            'norm_type', 
+            norm_type, 
+            'use_neox_rotary_style', 
+            use_neox_rotary_style,
+            'is_test',
+            not training,
+            'dropout_implementation',
+            mode,
+            'act_method',
+            activation,
+            'trans_qkvw',
+            trans_qkvw,
+            'ring_id',
+            ring_id,
+            'block_size',
+            block_size
+        )
+        if cache_kvs is not None:
+            return final_out, cache_kv_out
+        return final_out
+    else:
+        helper = LayerHelper('fused_multi_transformer_dybatch', **locals())
+        dtype = x.dtype
+        # check dtypes
+        check_variable_and_dtype(
+            x, 'x', ['uint16', 'float16', 'float32'], 'fused_multi_transformer_dybatch'
+        )
+        check_dtype(
+            dtype, 'dtype', ['uint16', 'float16', 'float32'], 'fused_multi_transformer_dybatch'
+        )
+
+        # set inputs
+        inputs = {}
+        inputs['X'] = [x]
+        inputs['LnScale'] = ln_scales
+        inputs['LnBias'] = ln_biases
+        inputs['QKVW'] = qkv_weights
+
+        if qkv_biases is not None:
+            inputs['QKVBias'] = qkv_biases
+        if cache_kvs is not None:
+            inputs['CacheKV'] = cache_kvs
+        if pre_caches is not None:
+            inputs['PreCaches'] = pre_caches
+        if rotary_emb_dims > 0:
+            inputs['RotaryPosEmb'] = rotary_embs
+        if block_tables is not None:
+            inputs['BlockTables'] = block_tables
+        inputs["CumOffsets"] = cum_offsets
+        inputs['PaddingOffset'] = padding_offset
+        inputs['SeqLengthsThisTime'] = seq_lens_this_time
+        inputs['SeqLengthsEncoder'] = seq_lens_encoder
+        inputs['SeqLengthsDecoder'] = seq_lens_decoder
+        inputs['SeqLengthsEncoderCum'] = cu_seqlens_q
+        inputs['SeqLengthsDecoderCum'] = cu_seqlens_k
+        inputs['SrcMask'] = src_mask
+        inputs['TgtMask'] = tgt_mask
         inputs['OutLinearW'] = linear_weights
         if linear_biases is not None:
             inputs['OutLinearBias'] = linear_biases
@@ -1133,6 +1412,15 @@ def fused_multi_transformer(
         inputs['FFN2Weight'] = ffn2_weights
         if ffn2_biases is not None:
             inputs['FFN2Bias'] = ffn2_biases
+        
+        if cache_k_scales is not None:
+            inputs["CacheKScale"] = cache_k_scales
+        if cache_v_scales is not None:
+            inputs["CacheVScale"] = cache_v_scales
+        if cache_k_out_scales is not None:
+            inputs["CacheKOutScale"] = cache_k_out_scales
+        if cache_v_out_scales is not None:
+            inputs["CacheVOutScale"] = cache_v_out_scales
 
         # set attrs
         attrs = {
@@ -1140,11 +1428,15 @@ def fused_multi_transformer(
             'epsilon': epsilon,
             'dropout_rate': dropout_rate,
             'rotary_emb_dims': rotary_emb_dims,
+            'max_input_length': max_input_length,
             'is_test': not training,
             'dropout_implementation': mode,
             'act_method': activation,
             'trans_qkvw': trans_qkvw,
+            'norm_type': norm_type,
+            'use_neox_rotary_style': use_neox_rotary_style,
             'ring_id': ring_id,
+            'block_size': block_size,
         }
 
         outputs = {}
@@ -1155,7 +1447,299 @@ def fused_multi_transformer(
             outputs['CacheKVOut'] = cache_kvs
 
         helper.append_op(
-            type='fused_multi_transformer',
+            type='fused_multi_transformer_dybatch',
+            inputs=inputs,
+            outputs=outputs,
+            attrs=attrs,
+        )
+
+        return (final_out, cache_kvs) if cache_kvs else final_out
+
+def fused_multi_transformer_dyquant_dybatch(
+    x,
+    ln_scales,
+    ln_biases,
+    qkv_weights,
+    qkv_biases,
+    linear_weights,
+    linear_biases,
+    ffn_ln_scales,
+    ffn_ln_biases,
+    ffn1_weights,
+    ffn1_biases,
+    ffn2_weights,
+    ffn2_biases,
+    qkv_scales,
+    out_linear_scales,
+    ffn1_w_scales,
+    ffn2_w_scales,
+    pre_layer_norm=True,
+    epsilon=1e-05,
+    cache_kvs=None,
+    pre_caches=None,
+    cum_offsets=None,
+    padding_offset=None,
+    seq_lens_this_time=None,
+    seq_lens_encoder=None,
+    seq_lens_decoder=None,
+    cu_seqlens_q=None,
+    cu_seqlens_k=None,
+    cache_k_scales=None,
+    cache_v_scales=None,
+    cache_k_out_scales=None,
+    cache_v_out_scales=None,
+    rotary_embs=None,
+    src_mask=None,
+    tgt_mask=None,
+    block_size=128,
+    block_tables=None,
+    dropout_rate=0.0,
+    rotary_emb_dims=0,
+    activation="gelu",
+    int8_gemm_method="weight-only",
+    interleaved_weight=True,
+    training=False,
+    norm_type="layernorm",
+    use_neox_rotary_style=False,
+    mode='upscale_in_train',
+    trans_qkvw=True,
+    ring_id=-1,
+    max_input_length=-1,
+    name=None
+):
+    r"""
+    This is a fusion operator to compute multi transformer layers in transformer model architecture.
+
+    Args:
+        x (Tensor): the input tensor could be 3-D tensor, the input data type could be float16 or float32, the shape is `[token\_num, d\_model]`.
+        ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of attention layer_norm, the shape is `[d\_model]`.
+        ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of attention layer_norm. the shape is `[d\_model]`.
+        qkv_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention qkv computation. The shape is `[3, num\_head, dim\_head, d\_model]`.
+        qkv_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention qkv computation. The shape is `[3, num\_head, dim\_head]`.
+        linear_weights (list(Tensor)|tuple(Tensor)): The weight tensors of attention linear. The shape is `[num\_head * dim\_head, d\_model]`.
+        linear_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of attention linear. The shape is `[d\_model]`.
+        ffn_ln_scales (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward layer_norm, the shape is `[d\_model]`
+        ffn_ln_biases (list(Tensor)|tuple(Tensor)): The bias tensors of feedforward layer_norm, the shape is `[d\_model]`
+        ffn1_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward first linear, the shape is `[d\_model, dim\_feedforward]`.
+        ffn1_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward first linear, the shape is `[dim\_feedforward]`.
+        ffn2_weights (list(Tensor)|tuple(Tensor)): The weight tensors of feedforward second linear, the shape is `[dim\_feedforward, d\_model]`.
+        ffn2_biases (list(Tensor)|tuple(Tensor)|None): The bias tensors of feedforward second linear, the shape is `[d_model]`.
+        pre_layer_norm (bool, optional): whether it is pre_layer_norm(True) or post_layer_norm(False). Default True.
+        epsilon (float, optional): Small float value added to denominator of the layer_norm to avoid dividing by zero. Default is 1e-5.
+        cache_kvs (list(Tensor)|tuple(Tensor), optional): The cache structure tensors for the generation model. The shape is `[2, bsz, num\_head, max\_seq\_len, head\_dim]`. Default None.
+        pre_caches (list(Tensor)|tuple(Tensor), optional): The prefix caches for the generation model. The shape is `[2, bsz, num\_head, cache\_len, head\_dim]`. Default None.
+        cum_offsets (Tensor): The cumsum offsets to report the mapping relationship from src_seq_id to tgt_seq_id. The shape is `[bsz, 1]`.
+        padding_offset (Tensor): The padding offset to report the mapping relationship from tgt_seq_id to src_seq_id. The shape is `[token\_num]`.
+        seq_lens_this_time (Tensor): The sequence lengths of this time. The shape is `[bsz]`.
+        seq_lens_encoder (Tensor): The sequence lengths of the encoder this time. The shape is `[bsz]`.
+        seq_lens_decoder (Tensor): The sequence lengths of the decoder this time. The shape is `[bsz]`.
+        rotary_embs (Tensor optional): The RoPE embs for rotary computation. The shape is `[2, bsz, 1, seq\_len, head\_dim]`. Default None.
+        src_mask (Tensor, optional):  A tensor used in multi-head attention to prevents attention to
+            some unwanted positions, usually used in encoder. It is a tensor
+            with shape `[batch_size, 1, sequence_length, sequence_length]`. Default None.
+        tgt_mask (Tensor, optional):  A tensor used in multi-head attention to prevents attention to
+            some unwanted positions, usually used in decoder. It is a tensor
+            with shape `[batch_size, 1, 1, sequence_length]`. Default None.
+        dropout_rate (float, optional): The dropout probability of setting units to zero. Default 0.0.
+        rotary_emb_dims (int, optional): The rotary_emb_dims of rotary computation, and it is 0 when rotary_embs is None,
+            1 when rotary_embs is not None and pos_extra_ids is None, 2 when rotary_embs and pos_extra_ids are both not None. Default 0.
+        activation (str, optional): The activation. Default "gelu".
+        training (bool, optional): A flag indicating whether it is in train phrase or not. Default False.
+        mode (str, optional): ['upscale_in_train'(default) | 'downscale_in_infer']
+
+                               1. upscale_in_train(default), upscale the output at training time
+
+                                  - train: out = input * mask / ( 1.0 - p )
+                                  - inference: out = input
+
+                               2. downscale_in_infer, downscale the output at inference
+
+                                  - train: out = input * mask
+                                  - inference: out = input * (1.0 - p)
+        trans_qkvw (bool, optional): Whether to transpose for weights of qkv.
+            If true, the shape eights of qkv should be [3, num_head, dim_head, dim_embed].
+            Otherwise the shape of weights of qkv should be [dim_embed, 3, num_head, dim_head]. Default True.
+        ring_id (int, optional): For distributed forward in tensor model parallel, only support NCCL. Default is -1, means not using mp.
+        max_input_length (int): The max input length of padded inputs.
+        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+
+    Returns:
+        Tensor|tuple: If `cache_kvs` is None, return a tensor that has
+        the same shape and data type with `x`, representing the output
+        of Transformer layers. If `cache_kvs` is not None, return the
+        tuple (output, cache_kvs), which output is the output of
+        Transformer layers, cache_kvs is inplace with input `cache_kvs`.
+    """
+    if mode not in ('downscale_in_infer', 'upscale_in_train'):
+        raise ValueError(
+            "mode argument should be 'downscale_in_infer' or 'upscale_in_train'"
+        )
+    mode = (
+        'downgrade_in_infer' if mode == 'downscale_in_infer' else mode
+    )  # semantic transfer
+
+    if in_dynamic_mode():
+        cache_kv_out, final_out = _legacy_C_ops.fused_multi_transformer_dyquant_dybatch(
+            x,
+            ln_scales,
+            ln_biases,
+            qkv_weights,
+            qkv_biases,
+            cache_kvs,
+            pre_caches,
+            rotary_embs,
+            cum_offsets,
+            padding_offset,
+            seq_lens_this_time,
+            seq_lens_encoder,
+            seq_lens_decoder,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            src_mask,
+            tgt_mask,
+            block_tables,
+            linear_weights,
+            linear_biases,
+            ffn_ln_scales,
+            ffn_ln_biases,
+            ffn1_weights,
+            ffn1_biases,
+            ffn2_weights,
+            ffn2_biases,
+            qkv_scales,
+            out_linear_scales,
+            ffn1_w_scales,
+            ffn2_w_scales,
+            cache_k_scales,
+            cache_v_scales,
+            cache_k_out_scales,
+            cache_v_out_scales,
+            cache_kvs,
+            'pre_layer_norm',
+            pre_layer_norm,
+            'epsilon',
+            epsilon,
+            'dropout_rate',
+            dropout_rate,
+            'rotary_emb_dims',
+            rotary_emb_dims,
+            'max_input_length',
+            max_input_length,
+            'norm_type', 
+            norm_type, 
+            'use_neox_rotary_style', 
+            use_neox_rotary_style,
+            'is_test',
+            not training,
+            'dropout_implementation',
+            mode,
+            'act_method',
+            activation,
+            'trans_qkvw',
+            trans_qkvw,
+            'ring_id',
+            ring_id,
+            'block_size',
+            block_size, 
+            'int8_gemm_method',
+            int8_gemm_method,
+            'interleaved_weight',
+            interleaved_weight
+        )
+        if cache_kvs is not None:
+            return final_out, cache_kv_out
+        return final_out
+    else:
+        helper = LayerHelper('fused_multi_transformer_dyquant_dybatch', **locals())
+        dtype = x.dtype
+        # check dtypes
+        check_variable_and_dtype(
+            x, 'x', ['uint16', 'float16', 'float32'], 'fused_multi_transformer_dyquant_dybatch'
+        )
+        check_dtype(
+            dtype, 'dtype', ['uint16', 'float16', 'float32'], 'fused_multi_transformer_dyquant_dybatch'
+        )
+
+        # set inputs
+        inputs = {}
+        inputs['X'] = [x]
+        inputs['LnScale'] = ln_scales
+        inputs['LnBias'] = ln_biases
+        inputs['QKVW'] = qkv_weights
+
+        if qkv_biases is not None:
+            inputs['QKVBias'] = qkv_biases
+        if cache_kvs is not None:
+            inputs['CacheKV'] = cache_kvs
+        if pre_caches is not None:
+            inputs['PreCaches'] = pre_caches
+        if rotary_emb_dims > 0:
+            inputs['RotaryPosEmb'] = rotary_embs
+        if block_tables is not None:
+            inputs['BlockTables'] = block_tables
+        inputs["CumOffsets"] = cum_offsets
+        inputs['PaddingOffset'] = padding_offset
+        inputs['SeqLengthsThisTime'] = seq_lens_this_time
+        inputs['SeqLengthsEncoder'] = seq_lens_encoder
+        inputs['SeqLengthsDecoder'] = seq_lens_decoder
+        inputs['SeqLengthsEncoderCum'] = cu_seqlens_q
+        inputs['SeqLengthsDecoderCum'] = cu_seqlens_k
+        inputs['SrcMask'] = src_mask
+        inputs['TgtMask'] = tgt_mask
+        inputs['OutLinearW'] = linear_weights
+        if linear_biases is not None:
+            inputs['OutLinearBias'] = linear_biases
+
+        inputs['FFNLnScale'] = ffn_ln_scales
+        inputs['FFNLnBias'] = ffn_ln_biases
+        inputs['FFN1Weight'] = ffn1_weights
+        if ffn1_biases is not None:
+            inputs['FFN1Bias'] = ffn1_biases
+        inputs['FFN2Weight'] = ffn2_weights
+        if ffn2_biases is not None:
+            inputs['FFN2Bias'] = ffn2_biases
+        inputs["QKVWScale"] = qkv_scales
+        inputs["OutLinearWScale"] = out_linear_scales
+        inputs["FFN1WeightScale"] = ffn1_w_scales
+        inputs["FFN2WeightScale"] = ffn2_w_scales
+        
+        if cache_k_scales is not None:
+            inputs["CacheKScale"] = cache_k_scales
+        if cache_v_scales is not None:
+            inputs["CacheVScale"] = cache_v_scales
+        if cache_k_out_scales is not None:
+            inputs["CacheKOutScale"] = cache_k_out_scales
+        if cache_v_out_scales is not None:
+            inputs["CacheVOutScale"] = cache_v_out_scales
+
+        # set attrs
+        attrs = {
+            'pre_layer_norm': pre_layer_norm,
+            'epsilon': epsilon,
+            'dropout_rate': dropout_rate,
+            'rotary_emb_dims': rotary_emb_dims,
+            'max_input_length': max_input_length,
+            'is_test': not training,
+            'dropout_implementation': mode,
+            'act_method': activation,
+            'trans_qkvw': trans_qkvw,
+            'norm_type': norm_type,
+            'use_neox_rotary_style': use_neox_rotary_style,
+            'ring_id': ring_id,
+            'block_size': block_size,
+            'interleaved_weight': interleaved_weight,
+            'int8_gemm_method': int8_gemm_method,
+        }
+
+        outputs = {}
+        final_out = helper.create_variable_for_type_inference(dtype=dtype)
+        outputs['Out'] = final_out
+        if cache_kvs:
+            # NOTE: inplace
+            outputs['CacheKVOut'] = cache_kvs
+
+        helper.append_op(
+            type='fused_multi_transformer_dyquant_dybatch',
             inputs=inputs,
             outputs=outputs,
             attrs=attrs,

@@ -595,8 +595,7 @@ def assign_skip_lod_tensor_array(input, output):
         # input is not generated in While sub block and modified by in-place and only
         # belong to inplace ops in constructing program process, because in-place pass
         # is only available in Graph level.
-        with paddle.fluid.framework._stride_in_no_check_dy2st_diff():
-            paddle.assign(input, output)
+        paddle.assign(input, output)
 
 
 def while_loop(cond, body, loop_vars, is_test=False, name=None):

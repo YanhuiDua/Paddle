@@ -66,7 +66,6 @@ __all__ = [
     'device_guard',
     'set_flags',
     'get_flags',
-    '_stride_in_no_check_dy2st_diff',
 ]
 
 EMPTY_VAR_NAME = core.kEmptyVarName()
@@ -3630,228 +3629,6 @@ class Operator:
         self.desc.dist_attr = dist_attr
 
 
-@signature_safe_contextmanager
-def _stride_in_no_check_dy2st_diff():
-    global _stride_in_no_check_dy2st_diff_mode
-    _stride_in_no_check_dy2st_diff_mode = True
-    try:
-        yield
-    finally:
-        _stride_in_no_check_dy2st_diff_mode = False
-
-
-def check_if_to_static_diff_with_dygraph(op_type, inplace_map, outputs):
-    if (
-        op_type == "while"
-    ):  # dont' need check while, while is only a wrapper of inner ops, we will stuck in inner op.
-        return
-    if outputs is not None:
-        for k, v in outputs.items():
-            if isinstance(v, Variable):
-                if v.is_view_var and not (
-                    op_type == "set_value"
-                    and inplace_map.get("Input", None) == "Out"
-                ):
-                    raise ValueError(
-                        'Sorry about what\'s happend. In to_static mode, %s\'s output variable %s is a viewed Tensor in dygraph. This will result in inconsistent calculation behavior between dynamic and static graphs. If you are sure it is safe, you can call with paddle.fluid.framework._stride_in_no_check_dy2st_diff() in your safe code block.'
-                        % (op_type, k)
-                    )
-            elif isinstance(v, list):
-                for var in v:
-                    if isinstance(var, Variable):
-                        if var.is_view_var and not (
-                            op_type == "set_value"
-                            and inplace_map.get("Input", None) == "Out"
-                        ):
-                            raise ValueError(
-                                'Sorry about what\'s happend. In to_static mode, %s\'s output variable %s is a viewed Tensor in dygraph. This will result in inconsistent calculation behavior between dynamic and static graphs. If you are sure it is safe, you can call with paddle.fluid.framework._stride_in_no_check_dy2st_diff() in your safe code block.'
-                                % (op_type, k)
-                            )
-
-
-def record_is_view_var(op_type, inputs, outputs):
-    if op_type == "slice":
-        if inputs is not None and isinstance(inputs["Input"], list):
-            if hasattr(inputs["Input"][0], "is_view_var"):
-                inputs["Input"][0].is_view_var = True
-        else:
-            if hasattr(inputs["Input"], "is_view_var"):
-                inputs["Input"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "strided_slice":
-        if inputs is not None and isinstance(inputs["Input"], list):
-            if hasattr(inputs["Input"][0], "is_view_var"):
-                inputs["Input"][0].is_view_var = True
-        else:
-            if hasattr(inputs["Input"], "is_view_var"):
-                inputs["Input"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "index_select":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "split":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None:
-            for out in outputs["Out"]:
-                if hasattr(out, "is_view_var"):
-                    out.is_view_var = True
-    elif op_type == "unsqueeze" or op_type == "unsqueeze2":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "squeeze" or op_type == "squeeze2":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "transpose" or op_type == "transpose2":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "unbind":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "diagonal":
-        if inputs is not None and isinstance(inputs["Input"], list):
-            if hasattr(inputs["Input"][0], "is_view_var"):
-                inputs["Input"][0].is_view_var = True
-        else:
-            if hasattr(inputs["Input"], "is_view_var"):
-                inputs["Input"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "flatten":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "imag":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "real":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "reshape" or op_type == "reshape2":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-    elif op_type == "as_real":
-        if inputs is not None and isinstance(inputs["X"], list):
-            if hasattr(inputs["X"][0], "is_view_var"):
-                inputs["X"][0].is_view_var = True
-        else:
-            if hasattr(inputs["X"], "is_view_var"):
-                inputs["X"].is_view_var = True
-        if outputs is not None and isinstance(outputs["Out"], list):
-            if hasattr(outputs["Out"][0], "is_view_var"):
-                outputs["Out"][0].is_view_var = True
-        else:
-            if hasattr(outputs["Out"], "is_view_var"):
-                outputs["Out"].is_view_var = True
-
-
 class Block:
     """
     In Fluid, a Program is consistence of multi-Block, and Block stores
@@ -4318,22 +4095,11 @@ class Block:
             ignore_ops = {
                 'conditional_block',
                 'conditional_block_grad',
-                'pylayer',
-                'pylayer_grad',
                 'recurrent',
                 'recurrent_grad',
                 'while',
                 'while_grad',
             }
-            from .dygraph.base import in_declarative_mode
-
-            if (
-                in_declarative_mode()
-                and not _stride_in_no_check_dy2st_diff_mode
-            ):
-                check_if_to_static_diff_with_dygraph(
-                    op_type, inplace_map, outputs
-                )
             if op_type not in ignore_ops:
                 pass_stop_gradient(inputs, outputs)
             with param_guard(inputs), param_guard(outputs):
@@ -4347,8 +4113,6 @@ class Block:
                 )
 
             self.ops.append(op)
-            if in_declarative_mode():
-                record_is_view_var(op_type, inputs, outputs)
 
         return op
 

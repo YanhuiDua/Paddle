@@ -167,7 +167,7 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
                         "received the second last dimension of x is %d",
                         query_seq_len));
 
-  PADDLE_ENFORCE_EQ(key_seq_len >= 32 && key_seq_len < 8192,
+  PADDLE_ENFORCE_EQ(key_seq_len >= 32 && key_seq_len < 16384,
                     true,
                     phi::errors::InvalidArgument(
                         "Input x's last dim must be between [32, 8192) "
@@ -264,6 +264,10 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
         SoftmaxMaskFuseGPUKernel<T, T, 13><<<blocks, threads, 0, stream>>>(
             x_data, mask_data, y_data, batch_count, key_seq_len);
         break;
+      case 14:  // 16384
+        SoftmaxMaskFuseGPUKernel<T, T, 14><<<blocks, threads, 0, stream>>>(
+            x_data, mask_data, y_data, batch_count, key_seq_len);
+        break;
       default:
         break;
     }
@@ -306,6 +310,9 @@ void FusedSoftmaxMaskKernel(const Context& dev_ctx,
         SoftmaxMaskFuseGPUKernel<T, float, 13><<<blocks, threads, 0, stream>>>(
             x_data, mask_data, y_data, batch_count, key_seq_len);
         break;
+      case 14:  // 16384
+        SoftmaxMaskFuseGPUKernel<T, float, 14><<<blocks, threads, 0, stream>>>(
+            x_data, mask_data, y_data, batch_count, key_seq_len);
       default:
         break;
     }

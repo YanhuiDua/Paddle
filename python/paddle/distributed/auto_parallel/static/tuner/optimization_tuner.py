@@ -465,7 +465,7 @@ class OptimizationTuner:
             + " "
             + profile_args
         )
-        cmd = [sys.executable, "-u"] + coverage_args + shlex.split(cmd_args)
+        cmd = [sys.executable] + coverage_args + shlex.split(cmd_args)
 
         parent_env = copy.copy(os.environ.copy())
         # env flags need for profile

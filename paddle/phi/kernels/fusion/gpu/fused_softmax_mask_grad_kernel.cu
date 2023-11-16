@@ -183,6 +183,10 @@ void FusedSoftmaxMaskGradKernel(const Context& dev_ctx,
       SoftmaxMaskFuseGradGPUKernel<T, 13><<<blocks, threads, 0, stream>>>(
           grad_y_data, grad_x_data, softmax_rst_data, batch_count, key_seq_len);
       break;
+    case 14:  // 16384
+      SoftmaxMaskFuseGradGPUKernel<T, 14><<<blocks, threads, 0, stream>>>(
+          grad_y_data, grad_x_data, softmax_rst_data, batch_count, key_seq_len);
+      break;
     default:
       break;
   }

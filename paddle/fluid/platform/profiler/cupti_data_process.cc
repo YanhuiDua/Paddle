@@ -65,7 +65,7 @@ void AddKernelRecord(const CUpti_ActivityKernel4* kernel,
   constexpr int threads_per_warp = 32;
 #endif
   const gpuDeviceProp& device_property =
-      paddle::platform::GetDeviceProperties(kernel->deviceId);
+      paddle::platform::GetDeviceProperties(kernel->deviceId - 8);
   blocks_per_sm =
       static_cast<float>(event.kernel_info.grid_x * event.kernel_info.grid_y *
                          event.kernel_info.grid_z) /

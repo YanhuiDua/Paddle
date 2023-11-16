@@ -1991,6 +1991,20 @@ void LogicalBinaryInferMeta(const MetaTensor& x,
   }
 }
 
+void TopPSamplingInferMeta(const MetaTensor& x,
+                           const MetaTensor& ps,
+                           const MetaTensor& threshold,
+                           int random_seed,
+                           MetaTensor* out,
+                           MetaTensor* ids) {
+  auto x_dims = x.dims();
+
+  ids->set_dims(phi::make_ddim({x_dims[0], 1}));
+  ids->set_dtype(DataType::INT64);
+  out->set_dims(phi::make_ddim({x_dims[0], 1}));
+  out->set_dtype(x.dtype());
+}
+
 void LUUnpackInferMeta(const MetaTensor& x,
                        const MetaTensor& pivots,
                        bool unpack_ludata,
